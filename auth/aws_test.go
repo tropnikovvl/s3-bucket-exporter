@@ -15,16 +15,6 @@ func TestGetAWSConfigValidation(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name: "Keys auth without credentials",
-			config: AuthConfig{
-				Method:   AuthMethodKeys,
-				Region:   "us-east-1",
-				Endpoint: "http://localhost:4566",
-			},
-			shouldError: true,
-			errorMsg:    "access key and secret key are required",
-		},
-		{
 			name: "Empty region",
 			config: AuthConfig{
 				Method: AuthMethodIAM,

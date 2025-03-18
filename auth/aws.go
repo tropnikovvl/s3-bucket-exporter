@@ -88,10 +88,6 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 
 	switch a.cfg.Method {
 	case AuthMethodKeys:
-		if a.cfg.AccessKey == "" || a.cfg.SecretKey == "" {
-			status = "error"
-			return aws.Config{}, errors.New("access key and secret key are required for keys authentication")
-		}
 		options = append(options, config.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(a.cfg.AccessKey, a.cfg.SecretKey, ""),
 		))
@@ -116,11 +112,6 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 				o.RoleARN = a.cfg.RoleARN
 				o.TokenRetriever = stscreds.IdentityTokenFile(a.cfg.WebIdentity)
 			},
-		))
-
-	case AuthMethodStatic:
-		options = append(options, config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider(a.cfg.AccessKey, a.cfg.SecretKey, ""),
 		))
 
 	case AuthMethodIAM:

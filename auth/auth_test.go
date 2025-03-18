@@ -40,15 +40,6 @@ func TestDetectAuthMethod(t *testing.T) {
 			config:         AuthConfig{},
 			expectedMethod: AuthMethodIAM,
 		},
-		{
-			name: "Keep existing method",
-			config: AuthConfig{
-				Method:    AuthMethodStatic,
-				AccessKey: "test-key",
-				SecretKey: "test-secret",
-			},
-			expectedMethod: AuthMethodStatic,
-		},
 	}
 
 	for _, tt := range tests {

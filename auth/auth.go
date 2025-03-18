@@ -7,11 +7,10 @@ import (
 )
 
 const (
-	AuthMethodIAM    = "iam"
-	AuthMethodKeys   = "keys"
-	AuthMethodRole   = "role"
-	AuthMethodWebID  = "webid"
-	AuthMethodStatic = "static"
+	AuthMethodIAM   = "iam"
+	AuthMethodKeys  = "keys"
+	AuthMethodRole  = "role"
+	AuthMethodWebID = "webid"
 )
 
 type AuthConfig struct {
