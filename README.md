@@ -59,7 +59,13 @@ docker run -p 9655:9655 -d \
   -s3_region=us-east-1
 ```
 
-> Note: For AWS, all buckets must be in the same region to avoid "BucketRegionError" errors.
+> Note: For AWS, all buckets must be in the same region to avoid "BucketRegionError" errors or manually limit the list of buckets. An example of IAM policy can be found [here](./deploy/aws/iam-policy.json)
+
+### Helm Example
+
+```sh
+helm install s3-bucket-exporter --namespace s3-bucket-exporter --create-namespace oci://ghcr.io/tropnikovvl/chart/s3-bucket-exporter --version 2.1.0
+```
 
 ## Configuration
 
@@ -92,8 +98,7 @@ The exporter uses a modular authentication system that automatically detects the
 1. **Access Keys** - Using AWS access key and secret key
 2. **IAM Role** - Using EC2/ECS instance role
 3. **Web Identity** - Using web identity token (e.g., for Kubernetes)
-4. **Static Credentials** - For testing/development
-5. **IAM Instance Profile** - For EC2 instances with attached IAM roles
+4. **IAM Instance Profile** - For EC2 instances with attached IAM roles
 
 ### Security Features
 
