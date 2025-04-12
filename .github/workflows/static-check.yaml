@@ -18,21 +18,11 @@ jobs:
 
       - name: Install Go
         uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Generate mocks
         run: go generate ./...
 
       - name: Static Code Analysis
-        uses: golangci/golangci-lint-action@v6
-        with:
-          skip-cache: true
-          args: |
-            --timeout 5m --out-${NO_FUTURE}format checkstyle:golangci-report.xml --issues-exit-code 0 --enable errcheck,gosimple,govet,ineffassign,staticcheck,typecheck,unused,gocritic,asasalint,asciicheck,errchkjson,copyloopvar,forcetypeassert,makezero,nilerr,unparam,unconvert,wastedassign,usestdlibvars 
-          # --timeout 5m --out-format checkstyle:golangci-report.xml -issues-exit-code 0 
-
-      - name: Cache golangci-lint report
-        uses: actions/cache@v4
-        id: restore-golangci-lint-report
-        with:
-          path: ./golangci-report.xml
-          key: ${{ github.sha }}
+        uses: golangci/golangci-lint-action@v7
