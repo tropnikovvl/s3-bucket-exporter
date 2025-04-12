@@ -38,7 +38,11 @@ func TestEnvString(t *testing.T) {
 				if err != nil {
 					t.Fatalf("failed to set environment variable: %v", err)
 				}
-				defer os.Unsetenv(tt.key)
+				defer func() {
+					if err := os.Unsetenv(tt.key); err != nil {
+						t.Errorf("failed to unset environment variable: %v", err)
+					}
+				}()
 			}
 			got := envString(tt.key, tt.defValue)
 			assert.Equal(t, tt.expValue, got)
@@ -84,7 +88,11 @@ func TestEnvBool(t *testing.T) {
 				if err != nil {
 					t.Fatalf("failed to set environment variable: %v", err)
 				}
-				defer os.Unsetenv(tt.key)
+				defer func() {
+					if err := os.Unsetenv(tt.key); err != nil {
+						t.Errorf("failed to unset environment variable: %v", err)
+					}
+				}()
 			}
 			got := envBool(tt.key, tt.defValue)
 			assert.Equal(t, tt.expValue, got)
