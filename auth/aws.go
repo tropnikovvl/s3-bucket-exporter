@@ -79,7 +79,7 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 
 	if a.cfg.SkipTLSVerify {
 		customTransport := http.DefaultTransport.(*http.Transport).Clone()
-		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: a.cfg.SkipTLSVerify}
+		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 		options = append(options, config.WithHTTPClient(&http.Client{
 			Transport: customTransport,
 		}))
