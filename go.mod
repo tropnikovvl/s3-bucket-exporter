@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.62
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.2
-	github.com/aws/aws-sdk-go-v2/service/sts v1.33.17
+	github.com/aws/aws-sdk-go-v2/service/sts v1.33.19
 	github.com/prometheus/client_golang v1.21.1
 	github.com/prometheus/client_model v0.6.1
 	github.com/sirupsen/logrus v1.9.3
