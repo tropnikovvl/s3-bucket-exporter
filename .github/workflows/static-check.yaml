@@ -25,4 +25,4 @@ jobs:
         run: go generate ./...
 
       - name: Static Code Analysis
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v8
