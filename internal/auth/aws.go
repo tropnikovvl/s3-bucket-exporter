@@ -42,12 +42,6 @@ type CachedAWSAuth struct {
 	refreshBuffer time.Duration // Buffer time before actual expiry to refresh proactively
 }
 
-// CachedAuthEntry holds a cached authentication config with expiry
-type CachedAuthEntry struct {
-	config    aws.Config
-	expiresAt time.Time
-}
-
 func NewAWSAuth(cfg AuthConfig) *AWSAuth {
 	return &AWSAuth{cfg: cfg}
 }
@@ -83,7 +77,7 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	}
 
 	log.Debug("Refreshing AWS authentication configuration")
-	
+
 	// Create temporary AWSAuth to get fresh config
 	tempAuth := NewAWSAuth(c.cfg)
 	newConfig, err := tempAuth.GetConfig(ctx)
@@ -94,7 +88,7 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	// Cache the new config with expiry time
 	c.cachedConfig = &newConfig
 	c.expiresAt = c.calculateExpiry()
-	
+
 	log.Debugf("AWS configuration cached until %v", c.expiresAt)
 	return newConfig, nil
 }
@@ -116,15 +110,6 @@ func (c *CachedAWSAuth) calculateExpiry() time.Time {
 		// Default conservative expiry
 		return time.Now().Add(30 * time.Minute)
 	}
-}
-
-// InvalidateCache forces cache invalidation for testing or error recovery
-func (c *CachedAWSAuth) InvalidateCache() {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.cachedConfig = nil
-	c.expiresAt = time.Time{}
-	log.Debug("AWS authentication cache invalidated")
 }
 
 type ConfigLoader interface {
