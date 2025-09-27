@@ -59,4 +59,4 @@ jobs:
           username: ${{ github.actor }}
           access-token: ${{ secrets.GH_TOKEN }}
           force: true
-          chart-folder: "helm"
+          chart-folder: "deployments/helm"
