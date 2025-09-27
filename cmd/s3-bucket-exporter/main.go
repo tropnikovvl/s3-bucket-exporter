@@ -15,19 +15,20 @@ import (
 )
 
 func updateMetrics(collector *controllers.S3Collector, interval time.Duration) {
+	authCfg := auth.AuthConfig{
+		Region:        config.S3Region,
+		Endpoint:      config.S3Endpoint,
+		AccessKey:     config.S3AccessKey,
+		SecretKey:     config.S3SecretKey,
+		SkipTLSVerify: config.S3SkipTLSVerify,
+	}
+
+	auth.DetectAuthMethod(&authCfg)
+	cachedAuth := auth.NewCachedAWSAuth(authCfg)
+
 	for {
-		authCfg := auth.AuthConfig{
-			Region:        config.S3Region,
-			Endpoint:      config.S3Endpoint,
-			AccessKey:     config.S3AccessKey,
-			SecretKey:     config.S3SecretKey,
-			SkipTLSVerify: config.S3SkipTLSVerify,
-		}
-
-		auth.DetectAuthMethod(&authCfg)
-
-		awsAuth := auth.NewAWSAuth(authCfg)
-		awsCfg, err := awsAuth.GetConfig(context.Background())
+		// Use cached authentication - will only refresh when needed
+		awsCfg, err := cachedAuth.GetConfig(context.Background())
 		if err != nil {
 			log.Errorf("Failed to configure authentication: %v", err)
 			time.Sleep(interval)
