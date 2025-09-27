@@ -109,6 +109,10 @@ class TestS3BucketExporter:
                     total_size = float(line.split()[-1])
                     parsed_metrics.setdefault("total", {}).setdefault("storage_classes", {}).setdefault(storage_class, {})["total_size"] = total_size
 
+                elif 's3_bucket_count' in line:
+                    bucket_count = float(line.split()[-1])
+                    parsed_metrics["bucket_count"] = bucket_count
+
             except (IndexError, ValueError) as e:
                 logger.warning(f"Error parsing metrics line: {line}. Error: {e}")
         return parsed_metrics
@@ -160,6 +164,13 @@ class TestS3BucketExporter:
         # Verify endpoint status
         assert parsed_metrics["endpoint_up"] == 1, (
             f"Endpoint status mismatch. Expected: 1, Got: {parsed_metrics['endpoint_up']}"
+        )
+
+        # Verify bucket count
+        expected_bucket_count = len(bucket_metadata)
+        assert parsed_metrics["bucket_count"] == expected_bucket_count, (
+            f"Bucket count mismatch. Expected: {expected_bucket_count}, "
+            f"Got: {parsed_metrics['bucket_count']}"
         )
 
         logger.info("Global metrics verified successfully")
