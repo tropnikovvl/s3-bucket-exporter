@@ -244,6 +244,7 @@ func TestS3Collector(t *testing.T) {
 				ObjectNumber: 1.0,
 			},
 		},
+		BucketCount:       1,
 		TotalListDuration: 2 * time.Second,
 		S3Buckets: []Bucket{
 			{
@@ -274,6 +275,7 @@ func TestS3Collector(t *testing.T) {
 			{"s3_endpoint_up", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 1.0},
 			{"s3_total_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1024.0},
 			{"s3_total_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1.0},
+			{"s3_bucket_count", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 1.0},
 			{"s3_bucket_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1024.0},
 			{"s3_bucket_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1.0},
 		}

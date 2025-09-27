@@ -34,6 +34,7 @@ type S3Summary struct {
 	EndpointStatus    bool                           `json:"endpointStatus"`
 	StorageClasses    map[string]StorageClassMetrics `json:"storageClasses"`
 	S3Buckets         Buckets                        `json:"s3Buckets"`
+	BucketCount       int                            `json:"bucketCount"`
 	TotalListDuration time.Duration                  `json:"totalListDuration"`
 }
 
@@ -65,6 +66,7 @@ var (
 		"up":              prometheus.NewDesc("s3_endpoint_up", "Connection to S3 successful", []string{"s3Endpoint", "s3Region"}, nil),
 		"total_size":      prometheus.NewDesc("s3_total_size", "S3 Total Bucket Size", []string{"s3Endpoint", "s3Region", "storageClass"}, nil),
 		"total_objects":   prometheus.NewDesc("s3_total_object_number", "S3 Total Object Number", []string{"s3Endpoint", "s3Region", "storageClass"}, nil),
+		"bucket_count":    prometheus.NewDesc("s3_bucket_count", "S3 Total Number of Buckets", []string{"s3Endpoint", "s3Region"}, nil),
 		"total_duration":  prometheus.NewDesc("s3_list_total_duration_seconds", "Total time spent listing objects across all buckets", []string{"s3Endpoint", "s3Region"}, nil),
 		"bucket_size":     prometheus.NewDesc("s3_bucket_size", "S3 Bucket Size", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass"}, nil),
 		"bucket_objects":  prometheus.NewDesc("s3_bucket_object_number", "S3 Bucket Object Number", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass"}, nil),
@@ -136,6 +138,7 @@ func (c *S3Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.Size, c.s3Endpoint, c.s3Region, class)
 		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.ObjectNumber, c.s3Endpoint, c.s3Region, class)
 	}
+	ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_count"], prometheus.GaugeValue, float64(metrics.BucketCount), c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["total_duration"], prometheus.GaugeValue, float64(metrics.TotalListDuration.Seconds()), c.s3Endpoint, c.s3Region)
 
 	// Per-bucket metrics
@@ -277,6 +280,7 @@ func fetchBucketData(s3BucketNames string, s3Client S3ClientInterface, s3Region 
 		summary.EndpointStatus = true
 	}
 
+	summary.BucketCount = len(bucketNames)
 	summary.TotalListDuration = time.Since(start)
 	return summary, nil
 }

@@ -12,6 +12,7 @@ Works with AWS and any S3 compatible endpoints (Minio, Ceph, Localstack, etc).
 ## Metrics
 
 Total metrics:
+  - `s3_bucket_count`
   - `s3_total_size`
   - `s3_total_object_number`
   - `s3_list_total_duration_seconds`
