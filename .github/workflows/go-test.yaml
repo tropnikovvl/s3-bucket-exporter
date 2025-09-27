@@ -17,8 +17,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Setup Golang with cache
+        uses: magnetikonline/action-golang-cache@v5
         with:
           go-version-file: go.mod
 
@@ -29,7 +29,7 @@ jobs:
         run: go build ./cmd/s3-bucket-exporter
 
       - name: E2E test
-        uses: hoverkraft-tech/compose-action@v2.2.0
+        uses: hoverkraft-tech/compose-action@v2.1.0
         with:
           compose-file: "./test/e2e/docker-compose.yaml"
           up-flags: --abort-on-container-exit
