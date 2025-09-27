@@ -120,9 +120,9 @@ scrape_configs:
 
 ## Grafana Dashboard
 
-A sample Grafana dashboard is available at [resources/grafana-s3bucket-dashboard.json](resources/grafana-s3bucket-dashboard.json):
+A sample Grafana dashboard is available at [grafana/templates/grafana-s3bucket-dashboard.json](grafana/templates/grafana-s3bucket-dashboard.json):
 
-![](images/grafana-s3bucket-dashboard.png)
+![](grafana/static/grafana-s3bucket-dashboard.png)
 
 ## Troubleshooting
 
@@ -148,7 +148,7 @@ A sample Grafana dashboard is available at [resources/grafana-s3bucket-dashboard
 ### Building from Source
 
 ```sh
-go build -o s3-bucket-exporter
+go build -o s3-bucket-exporter ./cmd/s3-bucket-exporter
 ```
 
 ### Running Tests
@@ -158,7 +158,7 @@ go test ./...
 ```
 
 ```sh
-cd e2e && docker compose up --abort-on-container-exit
+cd test/e2e && docker compose up --abort-on-container-exit
 ```
 
 ### Contributing

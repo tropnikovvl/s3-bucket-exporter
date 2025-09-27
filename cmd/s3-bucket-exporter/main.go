@@ -9,9 +9,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
-	"github.com/tropnikovvl/s3-bucket-exporter/auth"
-	"github.com/tropnikovvl/s3-bucket-exporter/config"
-	"github.com/tropnikovvl/s3-bucket-exporter/controllers"
+	"github.com/tropnikovvl/s3-bucket-exporter/internal/auth"
+	"github.com/tropnikovvl/s3-bucket-exporter/internal/config"
+	"github.com/tropnikovvl/s3-bucket-exporter/internal/controllers"
 )
 
 func updateMetrics(collector *controllers.S3Collector, interval time.Duration) {

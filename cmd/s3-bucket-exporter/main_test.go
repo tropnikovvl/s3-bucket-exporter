@@ -12,8 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tropnikovvl/s3-bucket-exporter/config"
-	"github.com/tropnikovvl/s3-bucket-exporter/controllers"
+	"github.com/tropnikovvl/s3-bucket-exporter/internal/config"
+	"github.com/tropnikovvl/s3-bucket-exporter/internal/controllers"
 )
 
 // Mock implementation for S3 client interface

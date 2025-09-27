@@ -9,7 +9,7 @@ services:
 
   s3-bucket-exporter:
     build:
-      context: ../
+      context: ../../
       dockerfile: Dockerfile
     depends_on:
       - localstack

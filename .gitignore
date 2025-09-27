@@ -20,10 +20,6 @@
 # Go workspace file
 go.work
 
-# tropnikovvl
-s3-bucket-exporter
-s3Information.json
-
 .idea
 
 __pycache__
