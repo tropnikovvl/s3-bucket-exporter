@@ -9,8 +9,9 @@ services:
 
   s3-bucket-exporter:
     build:
-      context: ../
+      context: ../../
       dockerfile: Dockerfile
+      no_cache: true
     depends_on:
       - localstack
     environment:
@@ -28,6 +29,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      no_cache: true
     depends_on:
       - localstack
       - s3-bucket-exporter

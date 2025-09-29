@@ -28,5 +28,6 @@ jobs:
           distribution: goreleaser
           version: latest
           args: release --clean
+          workdir: cmd/s3-bucket-exporter
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

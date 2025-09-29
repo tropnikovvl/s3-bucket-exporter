@@ -46,3 +46,9 @@ func GetAWSConfig(ctx context.Context, cfg AuthConfig) (aws.Config, error) {
 	auth := NewAWSAuth(cfg)
 	return auth.GetConfig(ctx)
 }
+
+// GetCachedAWSConfig returns a cached AWS config, refreshing only when needed
+func GetCachedAWSConfig(ctx context.Context, cfg AuthConfig) (aws.Config, error) {
+	cachedAuth := NewCachedAWSAuth(cfg)
+	return cachedAuth.GetConfig(ctx)
+}
