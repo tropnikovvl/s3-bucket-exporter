@@ -3,7 +3,7 @@ module github.com/tropnikovvl/s3-bucket-exporter
 go 1.25.1
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.39.2
+	github.com/aws/aws-sdk-go-v2 v1.39.3
 	github.com/aws/aws-sdk-go-v2/config v1.31.11
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.15
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.88.3
@@ -27,7 +27,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.29.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.1 // indirect
-	github.com/aws/smithy-go v1.23.0 // indirect
+	github.com/aws/smithy-go v1.23.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
