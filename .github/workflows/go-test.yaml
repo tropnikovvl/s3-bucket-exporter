@@ -29,7 +29,7 @@ jobs:
         run: go build ./cmd/s3-bucket-exporter
 
       - name: E2E test
-        uses: hoverkraft-tech/compose-action@v2.1.0
+        uses: hoverkraft-tech/compose-action@v2.4.1
         with:
           compose-file: "./test/e2e/docker-compose.yaml"
           up-flags: --abort-on-container-exit
