@@ -1,9 +1,14 @@
 package config
 
 import (
+	"errors"
 	"flag"
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
 var (
@@ -47,4 +52,56 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return x
+}
+
+// ValidateConfig validates the configuration settings
+func ValidateConfig() error {
+	var errs []string
+
+	// Validate scrape interval
+	if _, err := time.ParseDuration(ScrapeInterval); err != nil {
+		errs = append(errs, fmt.Sprintf("invalid scrape interval '%s': %v", ScrapeInterval, err))
+	}
+
+	// Validate S3 endpoint if provided
+	if S3Endpoint != "" {
+		parsedURL, err := url.Parse(S3Endpoint)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("invalid S3 endpoint URL '%s': %v", S3Endpoint, err))
+		} else if parsedURL.Scheme == "" {
+			errs = append(errs, fmt.Sprintf("S3 endpoint URL '%s' must include a scheme (http:// or https://)", S3Endpoint))
+		} else if parsedURL.Host == "" {
+			errs = append(errs, fmt.Sprintf("S3 endpoint URL '%s' must include a host", S3Endpoint))
+		}
+	}
+
+	// Validate S3 region is not empty
+	if strings.TrimSpace(S3Region) == "" {
+		errs = append(errs, "S3 region cannot be empty")
+	}
+
+	// Validate listen port format
+	if !strings.HasPrefix(ListenPort, ":") {
+		errs = append(errs, fmt.Sprintf("listen port '%s' must start with ':' (e.g., ':9655')", ListenPort))
+	}
+
+	// Validate log level
+	validLogLevels := map[string]bool{
+		"debug": true, "info": true, "warn": true,
+		"error": true, "fatal": true, "panic": true,
+	}
+	if !validLogLevels[strings.ToLower(LogLevel)] {
+		errs = append(errs, fmt.Sprintf("invalid log level '%s': must be one of debug, info, warn, error, fatal, panic", LogLevel))
+	}
+
+	// Validate log format
+	if LogFormat != "text" && LogFormat != "json" {
+		errs = append(errs, fmt.Sprintf("invalid log format '%s': must be 'text' or 'json'", LogFormat))
+	}
+
+	if len(errs) > 0 {
+		return errors.New("configuration validation failed:\n  - " + strings.Join(errs, "\n  - "))
+	}
+
+	return nil
 }

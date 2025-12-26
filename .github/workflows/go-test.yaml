@@ -10,7 +10,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  Builds:
+  test:
     runs-on: ubuntu-latest
     steps:
 
@@ -22,14 +22,78 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Test
-        run: go test -v ./...
+      # - name: Download dependencies
+      #   run: make deps
 
-      - name: Build
-        run: go build ./cmd/s3-bucket-exporter
+      - name: Verify dependencies
+        run: make verify
 
-      - name: E2E test
-        uses: hoverkraft-tech/compose-action@v2.1.0
+      - name: Check formatting
+        run: |
+          make fmt
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Code is not formatted. Run 'make fmt' locally."
+            git diff
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: make vet
+
+      - name: Install linting tools
+        run: make install-tools
+
+      - name: Run linter
+        run: make lint
+
+      - name: Run tests
+        run: make test
+
+      - name: Run tests with race detector
+        run: make test-race
+
+      # - name: Generate coverage report
+      #   run: make test-coverage
+
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@v5
+      #   with:
+      #     files: ./coverage.out
+      #     flags: unittests
+      #     name: codecov-umbrella
+      #     fail_ci_if_error: false
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Setup Golang with cache
+        uses: magnetikonline/action-golang-cache@v5
         with:
-          compose-file: "./test/e2e/docker-compose.yaml"
-          up-flags: --abort-on-container-exit
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: make build
+
+      - name: Verify binary exists
+        run: |
+          if [ ! -f bin/s3-bucket-exporter ]; then
+            echo "Binary not found at bin/s3-bucket-exporter"
+            exit 1
+          fi
+          ls -lh bin/s3-bucket-exporter
+
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Run E2E tests
+        run: make e2e-test

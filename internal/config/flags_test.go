@@ -99,3 +99,157 @@ func TestEnvBool(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupConfig   func()
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "valid configuration",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError: false,
+		},
+		{
+			name: "valid configuration with empty endpoint",
+			setupConfig: func() {
+				ScrapeInterval = "1h"
+				S3Endpoint = ""
+				S3Region = "eu-west-1"
+				ListenPort = ":8080"
+				LogLevel = "debug"
+				LogFormat = "json"
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid scrape interval",
+			setupConfig: func() {
+				ScrapeInterval = "invalid"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "invalid scrape interval",
+		},
+		{
+			name: "invalid endpoint - no scheme",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "must include a scheme",
+		},
+		{
+			name: "invalid endpoint - no host",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "http://"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "must include a host",
+		},
+		{
+			name: "empty region",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = ""
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "region cannot be empty",
+		},
+		{
+			name: "invalid listen port format",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = "9655"
+				LogLevel = "info"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "must start with ':'",
+		},
+		{
+			name: "invalid log level",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "invalid"
+				LogFormat = "text"
+			},
+			expectError:   true,
+			errorContains: "invalid log level",
+		},
+		{
+			name: "invalid log format",
+			setupConfig: func() {
+				ScrapeInterval = "5m"
+				S3Endpoint = "https://s3.amazonaws.com"
+				S3Region = "us-east-1"
+				ListenPort = ":9655"
+				LogLevel = "info"
+				LogFormat = "xml"
+			},
+			expectError:   true,
+			errorContains: "invalid log format",
+		},
+		{
+			name: "multiple validation errors",
+			setupConfig: func() {
+				ScrapeInterval = "invalid"
+				S3Endpoint = "invalid-url"
+				S3Region = ""
+				ListenPort = "9655"
+				LogLevel = "bad"
+				LogFormat = "bad"
+			},
+			expectError:   true,
+			errorContains: "configuration validation failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setupConfig()
+			err := ValidateConfig()
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorContains != "" {
+					assert.Contains(t, err.Error(), tt.errorContains)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
