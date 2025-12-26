@@ -8,4 +8,6 @@ RUN pip install -r requirements.txt
 
 COPY tests/ ./tests/
 
-CMD ["pytest", "-v", "/app/tests/test_s3_bucket_exporter.py"]
+ENV TEST_PROFILE=short
+
+CMD pytest -v /app/tests/test_${TEST_PROFILE}_running_e2e.py

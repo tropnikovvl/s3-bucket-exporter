@@ -35,8 +35,8 @@ NC=\033[0m # No Color
 
 .PHONY: all build clean test test-race test-coverage lint fmt vet help
 .PHONY: docker-build docker-push docker-multiarch run install uninstall
-.PHONY: deps deps-update tidy security-check helm-lint e2e-test
-.PHONY: release pre-commit version
+.PHONY: deps deps-update tidy security-check helm-lint e2e-test e2e-test-quick
+.PHONY: e2e-test-long e2e-test-long-quick release pre-commit version
 
 .DEFAULT_GOAL := help
 
@@ -135,17 +135,13 @@ e2e-test:
 		NC="\033[0m"; \
 		cleanup() { \
 			printf "$${YELLOW}Cleaning up...$${NC}\n"; \
-			(cd $$E2E_DIR && docker-compose down -v) 2>/dev/null || true; \
+			(cd $$E2E_DIR && docker-compose --profile short down -v) 2>/dev/null || true; \
 		}; \
 		trap cleanup EXIT; \
 		printf "$${YELLOW}Building Docker images...$${NC}\n"; \
-		(cd $$E2E_DIR && docker-compose build --no-cache); \
-		printf "$${YELLOW}Starting services...$${NC}\n"; \
-		(cd $$E2E_DIR && docker-compose up -d); \
-		printf "$${YELLOW}Waiting for services to be ready...$${NC}\n"; \
-		sleep 5; \
-		printf "$${YELLOW}Running tests...$${NC}\n"; \
-		(cd $$E2E_DIR && docker-compose run --rm test-runner pytest -v /app/tests); \
+		(cd $$E2E_DIR && docker-compose --profile short build --no-cache); \
+		printf "$${YELLOW}Running short tests...$${NC}\n"; \
+		(cd $$E2E_DIR && docker-compose --profile short up --abort-on-container-exit); \
 		printf "$${GREEN}✓ E2E tests passed$${NC}\n"; \
 	'
 
@@ -160,16 +156,52 @@ e2e-test-quick:
 		NC="\033[0m"; \
 		cleanup() { \
 			printf "$${YELLOW}Cleaning up...$${NC}\n"; \
-			(cd $$E2E_DIR && docker-compose down -v) 2>/dev/null || true; \
+			(cd $$E2E_DIR && docker-compose --profile short down -v) 2>/dev/null || true; \
 		}; \
 		trap cleanup EXIT; \
-		printf "$${YELLOW}Starting services...$${NC}\n"; \
-		(cd $$E2E_DIR && docker-compose up -d); \
-		printf "$${YELLOW}Waiting for services to be ready...$${NC}\n"; \
-		sleep 5; \
-		printf "$${YELLOW}Running tests...$${NC}\n"; \
-		(cd $$E2E_DIR && docker-compose run --rm test-runner pytest -v /app/tests); \
+		printf "$${YELLOW}Running short tests...$${NC}\n"; \
+		(cd $$E2E_DIR && docker-compose --profile short up --abort-on-container-exit); \
 		printf "$${GREEN}✓ E2E tests passed$${NC}\n"; \
+	'
+
+e2e-test-long: ## Run long-running e2e test (3 minutes, rebuilds Docker image)
+e2e-test-long:
+	@echo "$(GREEN)Running long-running e2e test...$(NC)"
+	@bash -c '\
+		set -e; \
+		E2E_DIR="test/e2e"; \
+		GREEN="\033[0;32m"; \
+		YELLOW="\033[0;33m"; \
+		NC="\033[0m"; \
+		cleanup() { \
+			printf "$${YELLOW}Cleaning up...$${NC}\n"; \
+			(cd $$E2E_DIR && docker-compose --profile long down -v) 2>/dev/null || true; \
+		}; \
+		trap cleanup EXIT; \
+		printf "$${YELLOW}Building Docker images...$${NC}\n"; \
+		(cd $$E2E_DIR && docker-compose --profile long build --no-cache); \
+		printf "$${YELLOW}Running long-running test...$${NC}\n"; \
+		(cd $$E2E_DIR && docker-compose --profile long up --abort-on-container-exit); \
+		printf "$${GREEN}✓ Long-running e2e test passed$${NC}\n"; \
+	'
+
+e2e-test-long-quick: ## Run long-running e2e test without rebuilding (faster for development)
+e2e-test-long-quick:
+	@echo "$(GREEN)Running long-running e2e test (no rebuild)...$(NC)"
+	@bash -c '\
+		set -e; \
+		E2E_DIR="test/e2e"; \
+		GREEN="\033[0;32m"; \
+		YELLOW="\033[0;33m"; \
+		NC="\033[0m"; \
+		cleanup() { \
+			printf "$${YELLOW}Cleaning up...$${NC}\n"; \
+			(cd $$E2E_DIR && docker-compose --profile long down -v) 2>/dev/null || true; \
+		}; \
+		trap cleanup EXIT; \
+		printf "$${YELLOW}Running long-running test...$${NC}\n"; \
+		(cd $$E2E_DIR && docker-compose --profile long up --abort-on-container-exit); \
+		printf "$${GREEN}✓ Long-running e2e test passed$${NC}\n"; \
 	'
 
 bench: ## Run benchmarks
