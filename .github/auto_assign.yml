@@ -1,0 +1,10 @@
+addAssignees: author
+
+reviewers:
+  - tropnikovvl
+
+options:
+  ignore_draft: true
+  ignored_keywords:
+    - WIP
+    - wip

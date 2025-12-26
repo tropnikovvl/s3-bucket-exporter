@@ -62,6 +62,7 @@ type S3ClientInterface interface {
 
 var (
 	s3ClientInstance S3ClientInterface
+	s3ClientMutex    sync.RWMutex
 	metricsDesc      = map[string]*prometheus.Desc{
 		"up":              prometheus.NewDesc("s3_endpoint_up", "Connection to S3 successful", []string{"s3Endpoint", "s3Region"}, nil),
 		"total_size":      prometheus.NewDesc("s3_total_size", "S3 Total Bucket Size", []string{"s3Endpoint", "s3Region", "storageClass"}, nil),
@@ -76,18 +77,26 @@ var (
 
 // SetS3Client sets the S3 client instance for testing
 func SetS3Client(client S3ClientInterface) {
+	s3ClientMutex.Lock()
+	defer s3ClientMutex.Unlock()
 	s3ClientInstance = client
 }
 
 // ResetS3Client resets the S3 client instance
 func ResetS3Client() {
+	s3ClientMutex.Lock()
+	defer s3ClientMutex.Unlock()
 	s3ClientInstance = nil
 }
 
 // GetS3Client returns the S3 client instance or creates a new one
 func GetS3Client(s3Conn S3Conn) (S3ClientInterface, error) {
-	if s3ClientInstance != nil {
-		return s3ClientInstance, nil
+	s3ClientMutex.RLock()
+	client := s3ClientInstance
+	s3ClientMutex.RUnlock()
+
+	if client != nil {
+		return client, nil
 	}
 
 	options := func(o *s3.Options) {
@@ -114,10 +123,7 @@ func (c *S3Collector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect - Implements prometheus.Collector.
 func (c *S3Collector) Collect(ch chan<- prometheus.Metric) {
-	c.metricsMutex.RLock()
-	metrics := c.Metrics
-	err := c.Err
-	c.metricsMutex.RUnlock()
+	metrics, err := c.GetMetrics()
 
 	status := 0
 	if metrics.EndpointStatus {
@@ -152,13 +158,20 @@ func (c *S3Collector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // UpdateMetrics updates the cached metrics
-func (c *S3Collector) UpdateMetrics(s3Conn S3Conn, s3BucketNames string) {
-	metrics, err := S3UsageInfo(s3Conn, s3BucketNames)
+func (c *S3Collector) UpdateMetrics(ctx context.Context, s3Conn S3Conn, s3BucketNames string) {
+	metrics, err := S3UsageInfo(ctx, s3Conn, s3BucketNames)
 
 	c.metricsMutex.Lock()
 	c.Metrics = metrics
 	c.Err = err
 	c.metricsMutex.Unlock()
+}
+
+// GetMetrics safely reads the cached metrics and error
+func (c *S3Collector) GetMetrics() (S3Summary, error) {
+	c.metricsMutex.RLock()
+	defer c.metricsMutex.RUnlock()
+	return c.Metrics, c.Err
 }
 
 // distinct - removes duplicates from a slice of strings
@@ -180,7 +193,7 @@ func distinct(input []string) []string {
 }
 
 // S3UsageInfo - gets S3 connection details and returns S3Summary
-func S3UsageInfo(s3Conn S3Conn, s3BucketNames string) (S3Summary, error) {
+func S3UsageInfo(ctx context.Context, s3Conn S3Conn, s3BucketNames string) (S3Summary, error) {
 	summary := S3Summary{EndpointStatus: false}
 
 	if s3Conn.AWSConfig == nil {
@@ -191,10 +204,10 @@ func S3UsageInfo(s3Conn S3Conn, s3BucketNames string) (S3Summary, error) {
 	if err != nil {
 		return summary, err
 	}
-	return fetchBucketData(s3BucketNames, client, s3Conn.Region, summary)
+	return fetchBucketData(ctx, s3BucketNames, client, s3Conn.Region, summary)
 }
 
-func fetchBucketData(s3BucketNames string, s3Client S3ClientInterface, s3Region string, summary S3Summary) (S3Summary, error) {
+func fetchBucketData(ctx context.Context, s3BucketNames string, s3Client S3ClientInterface, s3Region string, summary S3Summary) (S3Summary, error) {
 	var bucketNames []string
 	start := time.Now()
 
@@ -203,7 +216,7 @@ func fetchBucketData(s3BucketNames string, s3Client S3ClientInterface, s3Region 
 		bucketNames = distinct(strings.Split(s3BucketNames, ","))
 	} else {
 		// Otherwise, fetch all buckets
-		result, err := s3Client.ListBuckets(context.TODO(), &s3.ListBucketsInput{BucketRegion: aws.String(s3Region)})
+		result, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{BucketRegion: aws.String(s3Region)})
 		if err != nil {
 			log.Errorf("Failed to list buckets: %v", err)
 			return summary, errors.New("unable to connect to S3 endpoint")
@@ -251,7 +264,7 @@ func fetchBucketData(s3BucketNames string, s3Client S3ClientInterface, s3Region 
 		go func(bucketName string) {
 			defer wg.Done()
 
-			storageClasses, duration, err := calculateBucketMetrics(bucketName, s3Client)
+			storageClasses, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
 			if err != nil {
 				errMutex.Lock()
 				errs = append(errs, err)
@@ -286,14 +299,14 @@ func fetchBucketData(s3BucketNames string, s3Client S3ClientInterface, s3Region 
 }
 
 // calculateBucketMetrics - computes the total size and object count for a bucket
-func calculateBucketMetrics(bucketName string, s3Client S3ClientInterface) (map[string]StorageClassMetrics, time.Duration, error) {
+func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface) (map[string]StorageClassMetrics, time.Duration, error) {
 	var continuationToken *string
 	storageClasses := make(map[string]StorageClassMetrics)
 
 	start := time.Now()
 
 	for {
-		page, err := s3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+		page, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 			Bucket:            aws.String(bucketName),
 			ContinuationToken: continuationToken,
 		})
