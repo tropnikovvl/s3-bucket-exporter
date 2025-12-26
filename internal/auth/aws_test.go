@@ -56,9 +56,9 @@ func TestGetAWSConfigValidation(t *testing.T) {
 
 // Mock config loader for testing
 type mockConfigLoader struct {
-	loadFunc func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error)
+	loadFunc  func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error)
 	callCount int
-	mu sync.Mutex
+	mu        sync.Mutex
 }
 
 func (m *mockConfigLoader) Load(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
@@ -91,9 +91,9 @@ func TestNewCachedAWSAuth(t *testing.T) {
 
 func TestCachedAWSAuth_CalculateExpiry(t *testing.T) {
 	tests := []struct {
-		name           string
-		method         string
-		expectedDelta  time.Duration
+		name          string
+		method        string
+		expectedDelta time.Duration
 	}{
 		{
 			name:          "Keys method - 1 hour",
