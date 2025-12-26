@@ -149,17 +149,17 @@ A sample Grafana dashboard is available at [grafana/templates/grafana-s3bucket-d
 ### Building from Source
 
 ```sh
-go build -o s3-bucket-exporter ./cmd/s3-bucket-exporter
+make build
 ```
 
 ### Running Tests
 
 ```sh
-go test ./...
+make test
 ```
 
 ```sh
-cd test/e2e && docker compose up --abort-on-container-exit
+make e2e-test
 ```
 
 ### Contributing
