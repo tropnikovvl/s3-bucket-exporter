@@ -338,14 +338,14 @@ func TestInitFlags(t *testing.T) {
 			// Set environment variables
 			for key, value := range tt.envVars {
 				if value == "" {
-					os.Unsetenv(key)
+					_ = os.Unsetenv(key)
 				} else {
-					os.Setenv(key, value)
+					_ = os.Setenv(key, value)
 				}
 			}
 			defer func() {
 				for key := range tt.envVars {
-					os.Unsetenv(key)
+					_ = os.Unsetenv(key)
 				}
 			}()
 
