@@ -6,6 +6,9 @@ services:
     environment:
       - SERVICES=s3
       - LOCALSTACK_HOST=localstack
+    profiles:
+      - short
+      - long
 
   s3-bucket-exporter:
     build:
@@ -23,8 +26,11 @@ services:
       - LOG_LEVEL=debug
     ports:
       - "9655:9655"
+    profiles:
+      - short
+      - long
 
-  test-runner:
+  test-runner-short:
     build:
       context: .
       dockerfile: Dockerfile
@@ -37,5 +43,27 @@ services:
       - S3_REGION=us-east-1
       - S3_ENDPOINT=http://localstack:4566
       - S3_EXPORTER_URL=http://s3-bucket-exporter:9655/metrics
+      - TEST_PROFILE=short
     volumes:
       - ./tests:/app/tests
+    profiles:
+      - short
+
+  test-runner-long:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - localstack
+      - s3-bucket-exporter
+    environment:
+      - S3_ACCESS_KEY=test
+      - S3_SECRET_KEY=test
+      - S3_REGION=us-east-1
+      - S3_ENDPOINT=http://localstack:4566
+      - S3_EXPORTER_URL=http://s3-bucket-exporter:9655/metrics
+      - TEST_PROFILE=long
+    volumes:
+      - ./tests:/app/tests
+    profiles:
+      - long
