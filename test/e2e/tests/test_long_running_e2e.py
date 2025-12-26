@@ -188,6 +188,16 @@ class TestLongRunningE2E:
                     size = float(line.split()[-1])
                     parsed_metrics.setdefault(bucket, {}).setdefault("storage_classes", {}).setdefault(storage_class, {})["total_size"] = size
 
+                elif 's3_total_object_number' in line:
+                    storage_class = line.split('storageClass="')[1].split('"')[0]
+                    total_objects = float(line.split()[-1])
+                    parsed_metrics.setdefault("total", {}).setdefault("storage_classes", {}).setdefault(storage_class, {})["object_count"] = total_objects
+
+                elif 's3_total_size' in line:
+                    storage_class = line.split('storageClass="')[1].split('"')[0]
+                    total_size = float(line.split()[-1])
+                    parsed_metrics.setdefault("total", {}).setdefault("storage_classes", {}).setdefault(storage_class, {})["total_size"] = total_size
+
                 elif 's3_endpoint_up' in line:
                     endpoint_up = float(line.split()[-1])
                     parsed_metrics["endpoint_up"] = endpoint_up
@@ -261,7 +271,7 @@ class TestLongRunningE2E:
                 )
 
             logger.info(
-                f"  ✓ {bucket}: objects={expected_count}/{actual_count}, size={expected_size}/{actual_size}"
+                f"  ✓ {bucket}: objects={expected_count}/{int(actual_count)}, size={expected_size}/{int(actual_size)}"
             )
 
         if total_errors:
@@ -269,6 +279,26 @@ class TestLongRunningE2E:
             logger.error(error_msg)
             raise AssertionError(error_msg)
 
+        # Verify total metrics (s3_total_size and s3_total_object_number)
+        logger.info("  Verifying total metrics...")
+        expected_total_count = sum(state['object_count'] for state in actual_state.values())
+        expected_total_size = sum(state['total_size'] for state in actual_state.values())
+
+        total_metrics = exporter_metrics.get("total", {}).get("storage_classes", {}).get(storage_class, {})
+        actual_total_count = total_metrics.get('object_count', 0)
+        actual_total_size = total_metrics.get('total_size', 0)
+
+        if actual_total_count != expected_total_count:
+            error_msg = f"Check #{check_number}: Total object count mismatch. Expected: {expected_total_count}, Got: {actual_total_count}"
+            logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        if abs(actual_total_size - expected_total_size) > 1:
+            error_msg = f"Check #{check_number}: Total size mismatch. Expected: {expected_total_size}, Got: {actual_total_size}"
+            logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        logger.info(f"  ✓ Total metrics: objects={expected_total_count}/{int(actual_total_count)}, size={expected_total_size}/{int(actual_total_size)}")
         logger.info(f"✓ Check #{check_number}: All metrics verified successfully")
 
     def test_long_running_dynamic_s3_operations(self, s3_client, test_buckets):
