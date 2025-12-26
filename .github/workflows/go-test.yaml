@@ -90,4 +90,5 @@ jobs:
         uses: hoverkraft-tech/compose-action@v2.1.0
         with:
           compose-file: "./test/e2e/docker-compose.yaml"
-          up-flags: --profile long --abort-on-container-exit
+          compose-flags: "--profile long"
+          up-flags: "--abort-on-container-exit"
