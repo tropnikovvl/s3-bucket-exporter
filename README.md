@@ -68,7 +68,7 @@ docker run -p 9655:9655 -d \
 helm install s3-bucket-exporter \
   --namespace s3-bucket-exporter \
   --create-namespace oci://ghcr.io/tropnikovvl/chart/s3-bucket-exporter \
-  --version 2.2.1
+  --version 2.3.0
 ```
 
 ## Configuration
