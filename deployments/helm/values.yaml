@@ -21,6 +21,7 @@ fullnameOverride: ""
 
 env: {}
   # SCRAPE_INTERVAL: 1h
+  # S3_FORCE_PATH_STYLE: true
 
 # This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
 serviceAccount:
