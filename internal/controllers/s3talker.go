@@ -20,7 +20,7 @@ type S3ClientInterface interface {
 // distinct removes duplicates and blank entries from a slice of strings
 func distinct(input []string) []string {
 	seen := make(map[string]struct{})
-	result := []string{}
+	var result []string
 
 	for _, val := range input {
 		val = strings.TrimSpace(val)
@@ -62,15 +62,14 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	log.Debugf("List of buckets in %s region: %v", s3Region, bucketNames)
 
 	var (
-		wg           sync.WaitGroup
-		summaryMutex sync.Mutex
-		errs         []error
-		errMutex     sync.Mutex
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
 	)
 
 	processBucketResult := func(bucket Bucket) {
-		summaryMutex.Lock()
-		defer summaryMutex.Unlock()
+		mu.Lock()
+		defer mu.Unlock()
 
 		summary.S3Buckets = append(summary.S3Buckets, bucket)
 		for storageClass, metrics := range bucket.StorageClasses {
@@ -83,20 +82,15 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	}
 
 	for _, bucketName := range bucketNames {
-		bucketName := strings.TrimSpace(bucketName)
-		if bucketName == "" {
-			continue
-		}
-
 		wg.Add(1)
 		go func(bucketName string) {
 			defer wg.Done()
 
 			storageClasses, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
 			if err != nil {
-				errMutex.Lock()
+				mu.Lock()
 				errs = append(errs, err)
-				errMutex.Unlock()
+				mu.Unlock()
 				return
 			}
 

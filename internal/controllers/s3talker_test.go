@@ -67,6 +67,24 @@ func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 	assert.Len(t, summary.S3Buckets, 2)
 }
 
+func TestS3UsageInfo_TrailingSpaceInBucketNames(t *testing.T) {
+	mockClient := new(MockS3Client)
+	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents: []types.Object{
+			{Size: aws.Int64(1024)},
+		},
+		IsTruncated: aws.Bool(false),
+	}, nil)
+
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1, bucket2 ")
+
+	assert.NoError(t, err)
+	assert.True(t, summary.EndpointStatus)
+	assert.Len(t, summary.S3Buckets, 2)
+	bucketNames := []string{summary.S3Buckets[0].BucketName, summary.S3Buckets[1].BucketName}
+	assert.ElementsMatch(t, []string{"bucket1", "bucket2"}, bucketNames)
+}
+
 func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 	mockClient := new(MockS3Client)
 	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListBucketsOutput{

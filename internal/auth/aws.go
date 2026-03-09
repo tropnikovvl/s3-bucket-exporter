@@ -47,11 +47,14 @@ func NewCachedAWSAuth(cfg AuthConfig) *CachedAWSAuth {
 	}
 }
 
+func (c *CachedAWSAuth) isCacheValid() bool {
+	return c.cachedConfig != nil && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt.Add(-c.refreshBuffer)))
+}
+
 // GetConfig returns cached AWS config or refreshes if needed
 func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	c.mutex.RLock()
-	// Check if we have a valid cached config
-	if c.cachedConfig != nil && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt.Add(-c.refreshBuffer))) {
+	if c.isCacheValid() {
 		cfg := *c.cachedConfig
 		c.mutex.RUnlock()
 		log.Debug("Using cached AWS configuration")
@@ -64,7 +67,7 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	defer c.mutex.Unlock()
 
 	// Double-check in case another goroutine refreshed while we waited for the lock
-	if c.cachedConfig != nil && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt.Add(-c.refreshBuffer))) {
+	if c.isCacheValid() {
 		log.Debug("Using AWS configuration refreshed by another goroutine")
 		return *c.cachedConfig, nil
 	}
@@ -92,9 +95,6 @@ func (c *CachedAWSAuth) calculateExpiry() time.Time {
 	case AuthMethodRole, AuthMethodWebID:
 		// STS credentials typically expire in 1 hour, but we'll be conservative
 		return time.Now().Add(45 * time.Minute)
-	case AuthMethodIAM:
-		// IAM role credentials from EC2 metadata, refresh more frequently
-		return time.Now().Add(30 * time.Minute)
 	default:
 		return time.Now().Add(30 * time.Minute)
 	}
@@ -125,7 +125,7 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	if a.cfg.Endpoint != "" {
 		options = append(options, config.WithDefaultsMode(aws.DefaultsModeStandard))
 		options = append(options, func(o *config.LoadOptions) error {
-			o.BaseEndpoint = string(a.cfg.Endpoint)
+			o.BaseEndpoint = a.cfg.Endpoint
 			return nil
 		})
 	}

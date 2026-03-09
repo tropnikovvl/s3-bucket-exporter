@@ -19,7 +19,6 @@ import (
 
 // Mock implementation for S3 client interface
 type mockS3Client struct {
-	controllers.S3ClientInterface
 	listBucketsFunc   func(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
 	listObjectsV2Func func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
@@ -90,7 +89,7 @@ func TestUpdateMetrics(t *testing.T) {
 	metrics, err := collector.GetMetrics()
 
 	assert.NoError(t, err, "Expected no error with mock client")
-	assert.Equal(t, true, metrics.EndpointStatus, "EndpointStatus should be true")
+	assert.True(t, metrics.EndpointStatus, "EndpointStatus should be true")
 	storageMetrics := metrics.StorageClasses["STANDARD"]
 	assert.Equal(t, 1024.0, storageMetrics.Size, "Total size should match")
 	assert.Equal(t, 1.0, storageMetrics.ObjectNumber, "Total object number should match")
