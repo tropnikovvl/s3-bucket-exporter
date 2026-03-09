@@ -26,7 +26,7 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, inte
 		SkipTLSVerify: config.S3SkipTLSVerify,
 	}
 
-	auth.DetectAuthMethod(&authCfg)
+	authCfg.Method = auth.DetectAuthMethod(authCfg)
 	cachedAuth := auth.NewCachedAWSAuth(authCfg)
 
 	// Helper function to collect metrics

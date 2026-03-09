@@ -41,7 +41,8 @@ func TestGetAWSConfigValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := GetAWSConfig(context.Background(), tt.config)
+			a := NewAWSAuth(tt.config)
+			_, err := a.GetConfig(context.Background())
 			if tt.shouldError {
 				assert.Error(t, err)
 				if tt.errorMsg != "" {
@@ -94,11 +95,12 @@ func TestCachedAWSAuth_CalculateExpiry(t *testing.T) {
 		name          string
 		method        string
 		expectedDelta time.Duration
+		neverExpires  bool
 	}{
 		{
-			name:          "Keys method - 1 hour",
-			method:        AuthMethodKeys,
-			expectedDelta: 1 * time.Hour,
+			name:         "Keys method - never expires",
+			method:       AuthMethodKeys,
+			neverExpires: true,
 		},
 		{
 			name:          "Role method - 45 minutes",
@@ -125,38 +127,40 @@ func TestCachedAWSAuth_CalculateExpiry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cachedAuth := &CachedAWSAuth{
-				cfg: AuthConfig{
-					Method: tt.method,
+				AWSAuth: AWSAuth{
+					cfg: AuthConfig{
+						Method: tt.method,
+					},
 				},
 			}
 
-			before := time.Now()
 			expiry := cachedAuth.calculateExpiry()
-			after := time.Now()
 
-			// Verify expiry is approximately the expected duration from now
-			expectedExpiry := before.Add(tt.expectedDelta)
-			assert.True(t, expiry.After(expectedExpiry.Add(-time.Second)))
-			assert.True(t, expiry.Before(after.Add(tt.expectedDelta).Add(time.Second)))
+			if tt.neverExpires {
+				assert.True(t, expiry.IsZero(), "Keys method should return zero time (never expires)")
+				return
+			}
+
+			before := time.Now().Add(-time.Second)
+			after := time.Now().Add(tt.expectedDelta).Add(time.Second)
+			assert.True(t, expiry.After(before.Add(tt.expectedDelta)))
+			assert.True(t, expiry.Before(after))
 		})
 	}
 }
 
 func TestCachedAWSAuth_GetConfig_FirstCall(t *testing.T) {
-	// Setup mock
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
 			return aws.Config{Region: "us-east-1"}, nil
 		},
 	}
-	originalLoader := configLoader
-	configLoader = mockLoader
-	defer func() { configLoader = originalLoader }()
 
 	cachedAuth := NewCachedAWSAuth(AuthConfig{
 		Region: "us-east-1",
 		Method: AuthMethodIAM,
 	})
+	cachedAuth.AWSAuth.loader = mockLoader.Load
 
 	cfg, err := cachedAuth.GetConfig(context.Background())
 
@@ -168,20 +172,17 @@ func TestCachedAWSAuth_GetConfig_FirstCall(t *testing.T) {
 }
 
 func TestCachedAWSAuth_GetConfig_UsesCache(t *testing.T) {
-	// Setup mock
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
 			return aws.Config{Region: "us-east-1"}, nil
 		},
 	}
-	originalLoader := configLoader
-	configLoader = mockLoader
-	defer func() { configLoader = originalLoader }()
 
 	cachedAuth := NewCachedAWSAuth(AuthConfig{
 		Region: "us-east-1",
-		Method: AuthMethodKeys, // Keys method has 1 hour expiry
+		Method: AuthMethodKeys, // Keys method never expires
 	})
+	cachedAuth.AWSAuth.loader = mockLoader.Load
 
 	// First call - loads from AWS
 	_, err := cachedAuth.GetConfig(context.Background())
@@ -195,20 +196,17 @@ func TestCachedAWSAuth_GetConfig_UsesCache(t *testing.T) {
 }
 
 func TestCachedAWSAuth_GetConfig_RefreshesWhenExpired(t *testing.T) {
-	// Setup mock
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
 			return aws.Config{Region: "us-east-1"}, nil
 		},
 	}
-	originalLoader := configLoader
-	configLoader = mockLoader
-	defer func() { configLoader = originalLoader }()
 
 	cachedAuth := NewCachedAWSAuth(AuthConfig{
 		Region: "us-east-1",
 		Method: AuthMethodIAM,
 	})
+	cachedAuth.AWSAuth.loader = mockLoader.Load
 	// Set very short refresh buffer to force refresh
 	cachedAuth.refreshBuffer = 1 * time.Hour
 
@@ -239,14 +237,12 @@ func TestCachedAWSAuth_GetConfig_ConcurrentAccess(t *testing.T) {
 			return aws.Config{Region: "us-east-1"}, nil
 		},
 	}
-	originalLoader := configLoader
-	configLoader = mockLoader
-	defer func() { configLoader = originalLoader }()
 
 	cachedAuth := NewCachedAWSAuth(AuthConfig{
 		Region: "us-east-1",
 		Method: AuthMethodKeys,
 	})
+	cachedAuth.AWSAuth.loader = mockLoader.Load
 
 	// Make concurrent calls
 	var wg sync.WaitGroup
@@ -288,16 +284,14 @@ func TestCachedAWSAuth_GetConfig_DoubleCheckLocking(t *testing.T) {
 			return aws.Config{Region: "us-east-1"}, nil
 		},
 	}
-	originalLoader := configLoader
-	configLoader = mockLoader
-	defer func() { configLoader = originalLoader }()
 
 	cachedAuth := NewCachedAWSAuth(AuthConfig{
 		Region: "us-east-1",
 		Method: AuthMethodKeys,
 	})
+	cachedAuth.AWSAuth.loader = mockLoader.Load
 
-	// Set refresh buffer shorter than cache duration (Keys = 1 hour)
+	// Set refresh buffer shorter than cache duration (Keys = never expires, so use IAM-like logic)
 	cachedAuth.refreshBuffer = 30 * time.Minute
 
 	// First call to populate cache

@@ -30,12 +30,13 @@ func init() {
 }
 
 type AWSAuth struct {
-	cfg AuthConfig
+	cfg    AuthConfig
+	loader func(context.Context, ...func(*config.LoadOptions) error) (aws.Config, error)
 }
 
 // CachedAWSAuth provides cached authentication with refresh-based logic
 type CachedAWSAuth struct {
-	cfg           AuthConfig
+	AWSAuth
 	cachedConfig  *aws.Config
 	expiresAt     time.Time
 	mutex         sync.RWMutex
@@ -43,13 +44,16 @@ type CachedAWSAuth struct {
 }
 
 func NewAWSAuth(cfg AuthConfig) *AWSAuth {
-	return &AWSAuth{cfg: cfg}
+	return &AWSAuth{
+		cfg:    cfg,
+		loader: config.LoadDefaultConfig,
+	}
 }
 
 // NewCachedAWSAuth creates a new cached AWS authentication manager
 func NewCachedAWSAuth(cfg AuthConfig) *CachedAWSAuth {
 	return &CachedAWSAuth{
-		cfg:           cfg,
+		AWSAuth:       *NewAWSAuth(cfg),
 		refreshBuffer: 5 * time.Minute, // Refresh 5 minutes before expiry
 	}
 }
@@ -58,11 +62,11 @@ func NewCachedAWSAuth(cfg AuthConfig) *CachedAWSAuth {
 func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	c.mutex.RLock()
 	// Check if we have a valid cached config
-	if c.cachedConfig != nil && time.Now().Before(c.expiresAt.Add(-c.refreshBuffer)) {
-		config := *c.cachedConfig
+	if c.cachedConfig != nil && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt.Add(-c.refreshBuffer))) {
+		cfg := *c.cachedConfig
 		c.mutex.RUnlock()
 		log.Debug("Using cached AWS configuration")
-		return config, nil
+		return cfg, nil
 	}
 	c.mutex.RUnlock()
 
@@ -71,21 +75,18 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	defer c.mutex.Unlock()
 
 	// Double-check in case another goroutine refreshed while we waited for the lock
-	if c.cachedConfig != nil && time.Now().Before(c.expiresAt.Add(-c.refreshBuffer)) {
+	if c.cachedConfig != nil && (c.expiresAt.IsZero() || time.Now().Before(c.expiresAt.Add(-c.refreshBuffer))) {
 		log.Debug("Using AWS configuration refreshed by another goroutine")
 		return *c.cachedConfig, nil
 	}
 
 	log.Debug("Refreshing AWS authentication configuration")
 
-	// Create temporary AWSAuth to get fresh config
-	tempAuth := NewAWSAuth(c.cfg)
-	newConfig, err := tempAuth.GetConfig(ctx)
+	newConfig, err := c.AWSAuth.GetConfig(ctx)
 	if err != nil {
 		return aws.Config{}, err
 	}
 
-	// Cache the new config with expiry time
 	c.cachedConfig = &newConfig
 	c.expiresAt = c.calculateExpiry()
 
@@ -95,11 +96,10 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 
 // calculateExpiry determines when the cached config should expire
 func (c *CachedAWSAuth) calculateExpiry() time.Time {
-	// For different auth methods, set appropriate expiry times
 	switch c.cfg.Method {
 	case AuthMethodKeys:
-		// Static credentials don't expire, but refresh periodically for safety
-		return time.Now().Add(1 * time.Hour)
+		// Static credentials never expire
+		return time.Time{}
 	case AuthMethodRole, AuthMethodWebID:
 		// STS credentials typically expire in 1 hour, but we'll be conservative
 		return time.Now().Add(45 * time.Minute)
@@ -107,22 +107,9 @@ func (c *CachedAWSAuth) calculateExpiry() time.Time {
 		// IAM role credentials from EC2 metadata, refresh more frequently
 		return time.Now().Add(30 * time.Minute)
 	default:
-		// Default conservative expiry
 		return time.Now().Add(30 * time.Minute)
 	}
 }
-
-type ConfigLoader interface {
-	Load(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error)
-}
-
-type defaultConfigLoader struct{}
-
-func (d *defaultConfigLoader) Load(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
-	return config.LoadDefaultConfig(ctx, optFns...)
-}
-
-var configLoader ConfigLoader = &defaultConfigLoader{}
 
 func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	log.Debugf("Starting authentication with method: %s", a.cfg.Method)
@@ -170,7 +157,7 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		))
 
 	case AuthMethodRole:
-		baseConfig, err := configLoader.Load(ctx, options...)
+		baseConfig, err := a.loader(ctx, options...)
 		if err != nil {
 			status = "error"
 			return aws.Config{}, fmt.Errorf("failed to load base AWS config: %w", err)
@@ -199,5 +186,5 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		return aws.Config{}, fmt.Errorf("unsupported authentication method: %s", a.cfg.Method)
 	}
 
-	return configLoader.Load(ctx, options...)
+	return a.loader(ctx, options...)
 }
