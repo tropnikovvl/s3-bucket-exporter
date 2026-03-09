@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
@@ -17,7 +19,7 @@ import (
 	"github.com/tropnikovvl/s3-bucket-exporter/internal/controllers"
 )
 
-func updateMetrics(ctx context.Context, collector *controllers.S3Collector, interval time.Duration) {
+func updateMetrics(ctx context.Context, collector *controllers.S3Collector, interval time.Duration, clientFactory func(aws.Config) controllers.S3ClientInterface) {
 	authCfg := auth.AuthConfig{
 		Region:        config.S3Region,
 		Endpoint:      config.S3Endpoint,
@@ -29,32 +31,20 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, inte
 	authCfg.Method = auth.DetectAuthMethod(authCfg)
 	cachedAuth := auth.NewCachedAWSAuth(authCfg)
 
-	// Helper function to collect metrics
 	collectMetrics := func() {
-		// Create a context with timeout for this iteration
-		// Timeout is 90% of the interval to ensure we have buffer
 		timeoutDuration := time.Duration(float64(interval) * 0.9)
 		iterCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
 		defer cancel()
 
-		// Use cached authentication - will only refresh when needed
 		awsCfg, err := cachedAuth.GetConfig(iterCtx)
 		if err != nil {
 			log.Errorf("Failed to configure authentication: %v", err)
 			return
 		}
 
-		s3Conn := controllers.S3Conn{
-			Endpoint:       config.S3Endpoint,
-			Region:         config.S3Region,
-			ForcePathStyle: config.S3ForcePathStyle,
-			AWSConfig:      &awsCfg,
-		}
-
-		collector.UpdateMetrics(iterCtx, s3Conn, config.S3BucketNames)
+		collector.UpdateMetrics(iterCtx, clientFactory(awsCfg), config.S3Region, config.S3BucketNames)
 	}
 
-	// Collect metrics immediately on startup
 	collectMetrics()
 
 	ticker := time.NewTicker(interval)
@@ -83,7 +73,6 @@ func main() {
 	config.InitFlags()
 	flag.Parse()
 
-	// Validate configuration before proceeding
 	if err := config.ValidateConfig(); err != nil {
 		log.Fatalf("Configuration validation failed: %v", err)
 	}
@@ -95,12 +84,15 @@ func main() {
 		log.Fatalf("Invalid scrape interval: %s", config.ScrapeInterval)
 	}
 
-	// Create context that will be canceled on shutdown signal
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
-	go updateMetrics(ctx, collector, interval)
+	go updateMetrics(ctx, collector, interval, func(cfg aws.Config) controllers.S3ClientInterface {
+		return s3.NewFromConfig(cfg, func(o *s3.Options) {
+			o.UsePathStyle = config.S3ForcePathStyle
+		})
+	})
 
 	prometheus.MustRegister(collector)
 
@@ -114,11 +106,9 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Channel to listen for OS signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Start server in a goroutine
 	go func() {
 		log.Infof("Starting server on %s", config.ListenPort)
 		if config.S3BucketNames != "" {
@@ -132,18 +122,14 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
 	sig := <-sigChan
 	log.Infof("Received signal %v, initiating graceful shutdown...", sig)
 
-	// Cancel the context to stop metrics collection
 	cancel()
 
-	// Create a deadline for shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	// Attempt graceful shutdown
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Errorf("Server shutdown error: %v", err)
 	} else {

@@ -160,7 +160,7 @@ func TestCachedAWSAuth_GetConfig_FirstCall(t *testing.T) {
 		Region: "us-east-1",
 		Method: AuthMethodIAM,
 	})
-	cachedAuth.AWSAuth.loader = mockLoader.Load
+	cachedAuth.loader = mockLoader.Load
 
 	cfg, err := cachedAuth.GetConfig(context.Background())
 
@@ -182,7 +182,7 @@ func TestCachedAWSAuth_GetConfig_UsesCache(t *testing.T) {
 		Region: "us-east-1",
 		Method: AuthMethodKeys, // Keys method never expires
 	})
-	cachedAuth.AWSAuth.loader = mockLoader.Load
+	cachedAuth.loader = mockLoader.Load
 
 	// First call - loads from AWS
 	_, err := cachedAuth.GetConfig(context.Background())
@@ -206,7 +206,7 @@ func TestCachedAWSAuth_GetConfig_RefreshesWhenExpired(t *testing.T) {
 		Region: "us-east-1",
 		Method: AuthMethodIAM,
 	})
-	cachedAuth.AWSAuth.loader = mockLoader.Load
+	cachedAuth.loader = mockLoader.Load
 	// Set very short refresh buffer to force refresh
 	cachedAuth.refreshBuffer = 1 * time.Hour
 
@@ -242,7 +242,7 @@ func TestCachedAWSAuth_GetConfig_ConcurrentAccess(t *testing.T) {
 		Region: "us-east-1",
 		Method: AuthMethodKeys,
 	})
-	cachedAuth.AWSAuth.loader = mockLoader.Load
+	cachedAuth.loader = mockLoader.Load
 
 	// Make concurrent calls
 	var wg sync.WaitGroup
@@ -289,7 +289,7 @@ func TestCachedAWSAuth_GetConfig_DoubleCheckLocking(t *testing.T) {
 		Region: "us-east-1",
 		Method: AuthMethodKeys,
 	})
-	cachedAuth.AWSAuth.loader = mockLoader.Load
+	cachedAuth.loader = mockLoader.Load
 
 	// Set refresh buffer shorter than cache duration (Keys = never expires, so use IAM-like logic)
 	cachedAuth.refreshBuffer = 30 * time.Minute

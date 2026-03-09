@@ -36,15 +36,6 @@ func (m *MockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjects
 
 func TestS3UsageInfo_SingleBucket(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(1024), StorageClass: "STANDARD"},
@@ -53,7 +44,7 @@ func TestS3UsageInfo_SingleBucket(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), s3Conn, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -64,15 +55,6 @@ func TestS3UsageInfo_SingleBucket(t *testing.T) {
 
 func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(1024)},
@@ -81,7 +63,7 @@ func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), s3Conn, "bucket1,bucket2")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -92,23 +74,13 @@ func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 
 func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
-	mockBucket1 := types.Bucket{Name: aws.String("bucket1")}
-	mockBucket2 := types.Bucket{Name: aws.String("bucket2")}
-	mockBucket3 := types.Bucket{Name: aws.String("bucket3")}
-
 	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListBucketsOutput{
-		Buckets: []types.Bucket{mockBucket1, mockBucket2, mockBucket3},
+		Buckets: []types.Bucket{
+			{Name: aws.String("bucket1")},
+			{Name: aws.String("bucket2")},
+			{Name: aws.String("bucket3")},
+		},
 	}, nil)
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(1024)},
@@ -117,7 +89,7 @@ func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), s3Conn, "")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -128,7 +100,6 @@ func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 
 func TestCalculateBucketMetrics(t *testing.T) {
 	mockClient := new(MockS3Client)
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(1024), StorageClass: "STANDARD"},
@@ -150,24 +121,6 @@ func TestCalculateBucketMetrics(t *testing.T) {
 
 func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:   "us-east-1",
-		Endpoint: "s3.amazonaws.com",
-		AWSConfig: &aws.Config{
-			Region:      "us-east-1",
-			Credentials: nil, // IAM role credentials should be automatically resolved
-		},
-	}
-
-	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListBucketsOutput{
-		Buckets: []types.Bucket{
-			{Name: aws.String("bucket1")},
-		},
-	}, nil)
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(100)},
@@ -175,41 +128,28 @@ func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), s3Conn, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
 	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].Size)
 	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].ObjectNumber)
 	assert.Len(t, summary.S3Buckets, 1)
-	assert.Equal(t, "us-east-1", s3Conn.AWSConfig.Region)
-	assert.Nil(t, s3Conn.AWSConfig.Credentials)
 }
 
 func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
+	// Verify that static credentials work correctly end-to-end
+	creds := aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+		"test-access-key",
+		"test-secret-key",
+		"",
+	))
+	retrieved, err := creds.Retrieve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "test-access-key", retrieved.AccessKeyID)
+	assert.Equal(t, "test-secret-key", retrieved.SecretAccessKey)
+
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:   "us-east-1",
-		Endpoint: "s3.amazonaws.com",
-		AWSConfig: &aws.Config{
-			Region: "us-east-1",
-			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
-				"test-access-key",
-				"test-secret-key",
-				"",
-			)),
-		},
-	}
-
-	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListBucketsOutput{
-		Buckets: []types.Bucket{
-			{Name: aws.String("bucket1")},
-		},
-	}, nil)
-
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
 			{Size: aws.Int64(100)},
@@ -217,19 +157,13 @@ func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), s3Conn, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
 	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].Size)
 	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].ObjectNumber)
 	assert.Len(t, summary.S3Buckets, 1)
-	assert.Equal(t, "us-east-1", s3Conn.AWSConfig.Region)
-
-	creds, err := s3Conn.AWSConfig.Credentials.Retrieve(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, "test-access-key", creds.AccessKeyID)
-	assert.Equal(t, "test-secret-key", creds.SecretAccessKey)
 }
 
 func TestS3Collector(t *testing.T) {
@@ -238,7 +172,7 @@ func TestS3Collector(t *testing.T) {
 
 	collector := NewS3Collector(s3Endpoint, s3Region)
 	collector.metricsMutex.Lock()
-	collector.Metrics = S3Summary{
+	collector.metrics = S3Summary{
 		EndpointStatus: true,
 		StorageClasses: map[string]StorageClassMetrics{
 			"STANDARD": {
@@ -370,13 +304,11 @@ func TestGetMetrics(t *testing.T) {
 
 	collector := NewS3Collector(s3Endpoint, s3Region)
 
-	// Test reading empty metrics
 	metrics, err := collector.GetMetrics()
 	assert.NoError(t, err)
 	assert.False(t, metrics.EndpointStatus)
 	assert.Equal(t, 0, metrics.BucketCount)
 
-	// Set metrics manually
 	testMetrics := S3Summary{
 		EndpointStatus: true,
 		StorageClasses: map[string]StorageClassMetrics{
@@ -406,11 +338,10 @@ func TestGetMetrics(t *testing.T) {
 	}
 
 	collector.metricsMutex.Lock()
-	collector.Metrics = testMetrics
-	collector.Err = nil
+	collector.metrics = testMetrics
+	collector.err = nil
 	collector.metricsMutex.Unlock()
 
-	// Test reading populated metrics
 	metrics, err = collector.GetMetrics()
 	assert.NoError(t, err)
 	assert.True(t, metrics.EndpointStatus)
@@ -421,10 +352,9 @@ func TestGetMetrics(t *testing.T) {
 	assert.Equal(t, "test-bucket-1", metrics.S3Buckets[0].BucketName)
 	assert.Equal(t, "test-bucket-2", metrics.S3Buckets[1].BucketName)
 
-	// Test reading when error is set
 	testError := errors.New("test error")
 	collector.metricsMutex.Lock()
-	collector.Err = testError
+	collector.err = testError
 	collector.metricsMutex.Unlock()
 
 	metrics, err = collector.GetMetrics()
@@ -433,16 +363,11 @@ func TestGetMetrics(t *testing.T) {
 }
 
 func TestGetMetricsConcurrentAccess(t *testing.T) {
-	s3Endpoint := "http://localhost"
-	s3Region := "us-east-1"
+	collector := NewS3Collector("http://localhost", "us-east-1")
 
-	collector := NewS3Collector(s3Endpoint, s3Region)
-
-	// Start multiple goroutines reading metrics
 	var wg sync.WaitGroup
-	readCount := 100
 
-	for i := 0; i < readCount; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -450,13 +375,12 @@ func TestGetMetricsConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Concurrently update metrics
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(iteration int) {
 			defer wg.Done()
 			collector.metricsMutex.Lock()
-			collector.Metrics = S3Summary{
+			collector.metrics = S3Summary{
 				EndpointStatus: true,
 				BucketCount:    iteration,
 			}
@@ -466,7 +390,6 @@ func TestGetMetricsConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify final state is readable
 	metrics, err := collector.GetMetrics()
 	assert.NoError(t, err)
 	assert.True(t, metrics.EndpointStatus)
@@ -474,28 +397,14 @@ func TestGetMetricsConcurrentAccess(t *testing.T) {
 
 func TestContextCancellation(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
-	// Create a context that's already canceled
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// Mock should not be called if context is already canceled
-	// But the operation might still try, so we need to handle both cases
 	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListBucketsOutput{Buckets: []types.Bucket{}}, context.Canceled).Maybe()
 
-	summary, err := S3UsageInfo(ctx, s3Conn, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	// Should handle cancellation gracefully
-	// Either returns an error or empty summary
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "")
+
 	if err != nil {
 		assert.Contains(t, err.Error(), "unable to connect")
 	} else {
@@ -505,29 +414,16 @@ func TestContextCancellation(t *testing.T) {
 
 func TestContextTimeout(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
-
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
-	// Create a context with very short timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
-	defer cancel()
-
-	// Wait for context to timeout
-	time.Sleep(10 * time.Millisecond)
-
-	// Mock returns context deadline exceeded
 	mockClient.On("ListBuckets", mock.Anything, mock.Anything, mock.Anything).
 		Return(&s3.ListBucketsOutput{}, context.DeadlineExceeded)
 
-	summary, err := S3UsageInfo(ctx, s3Conn, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer cancel()
 
-	// Should handle timeout
+	time.Sleep(10 * time.Millisecond)
+
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "")
+
 	assert.Error(t, err)
 	assert.False(t, summary.EndpointStatus)
 }
@@ -539,16 +435,7 @@ const testContextKey contextKey = "test-key"
 
 func TestContextPropagationThroughChain(t *testing.T) {
 	mockClient := new(MockS3Client)
-	SetS3Client(mockClient)
-	defer ResetS3Client()
 
-	s3Conn := S3Conn{
-		Region:    "us-west-2",
-		Endpoint:  "test-endpoint",
-		AWSConfig: &aws.Config{},
-	}
-
-	// Track that context is passed through
 	var capturedCtx context.Context
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -561,12 +448,10 @@ func TestContextPropagationThroughChain(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), testContextKey, "test-value")
 
-	summary, err := S3UsageInfo(ctx, s3Conn, "test-bucket")
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "test-bucket")
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-
-	// Verify context was passed through
 	assert.NotNil(t, capturedCtx)
 	assert.Equal(t, "test-value", capturedCtx.Value(testContextKey))
 }
