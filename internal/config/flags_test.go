@@ -108,134 +108,134 @@ func TestEnvBool(t *testing.T) {
 func TestValidateConfig(t *testing.T) {
 	tests := []struct {
 		name          string
-		setupConfig   func()
+		cfg           Config
 		expectError   bool
 		errorContains string
 	}{
 		{
 			name: "valid configuration",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError: false,
 		},
 		{
 			name: "valid configuration with empty endpoint",
-			setupConfig: func() {
-				ScrapeInterval = "1h"
-				S3Endpoint = ""
-				S3Region = "eu-west-1"
-				ListenPort = ":8080"
-				LogLevel = "debug"
-				LogFormat = "json"
+			cfg: Config{
+				ScrapeInterval: "1h",
+				S3Endpoint:     "",
+				S3Region:       "eu-west-1",
+				ListenPort:     ":8080",
+				LogLevel:       "debug",
+				LogFormat:      "json",
 			},
 			expectError: false,
 		},
 		{
 			name: "invalid scrape interval",
-			setupConfig: func() {
-				ScrapeInterval = "invalid"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "invalid",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "invalid scrape interval",
 		},
 		{
 			name: "invalid endpoint - no scheme",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "must include a scheme",
 		},
 		{
 			name: "invalid endpoint - no host",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "http://"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "http://",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "must include a host",
 		},
 		{
 			name: "empty region",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = ""
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "region cannot be empty",
 		},
 		{
 			name: "invalid listen port format",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = "9655"
-				LogLevel = "info"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     "9655",
+				LogLevel:       "info",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "must start with ':'",
 		},
 		{
 			name: "invalid log level",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "invalid"
-				LogFormat = "text"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "invalid",
+				LogFormat:      "text",
 			},
 			expectError:   true,
 			errorContains: "invalid log level",
 		},
 		{
 			name: "invalid log format",
-			setupConfig: func() {
-				ScrapeInterval = "5m"
-				S3Endpoint = "https://s3.amazonaws.com"
-				S3Region = "us-east-1"
-				ListenPort = ":9655"
-				LogLevel = "info"
-				LogFormat = "xml"
+			cfg: Config{
+				ScrapeInterval: "5m",
+				S3Endpoint:     "https://s3.amazonaws.com",
+				S3Region:       "us-east-1",
+				ListenPort:     ":9655",
+				LogLevel:       "info",
+				LogFormat:      "xml",
 			},
 			expectError:   true,
 			errorContains: "invalid log format",
 		},
 		{
 			name: "multiple validation errors",
-			setupConfig: func() {
-				ScrapeInterval = "invalid"
-				S3Endpoint = "invalid-url"
-				S3Region = ""
-				ListenPort = "9655"
-				LogLevel = "bad"
-				LogFormat = "bad"
+			cfg: Config{
+				ScrapeInterval: "invalid",
+				S3Endpoint:     "invalid-url",
+				S3Region:       "",
+				ListenPort:     "9655",
+				LogLevel:       "bad",
+				LogFormat:      "bad",
 			},
 			expectError:   true,
 			errorContains: "configuration validation failed",
@@ -244,8 +244,7 @@ func TestValidateConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.setupConfig()
-			err := ValidateConfig()
+			err := tt.cfg.Validate()
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -260,19 +259,17 @@ func TestValidateConfig(t *testing.T) {
 }
 
 func TestInitFlags(t *testing.T) {
-	// Save original flag.CommandLine
 	oldCommandLine := flag.CommandLine
 	defer func() { flag.CommandLine = oldCommandLine }()
 
 	tests := []struct {
 		name     string
 		envVars  map[string]string
-		expected map[string]interface{}
+		expected Config
 	}{
 		{
 			name: "default values when no env vars set",
 			envVars: map[string]string{
-				// Clear all env vars
 				"LISTEN_PORT":         "",
 				"LOG_LEVEL":           "",
 				"LOG_FORMAT":          "",
@@ -285,18 +282,18 @@ func TestInitFlags(t *testing.T) {
 				"S3_FORCE_PATH_STYLE": "",
 				"S3_SKIP_TLS_VERIFY":  "",
 			},
-			expected: map[string]interface{}{
-				"ListenPort":       ":9655",
-				"LogLevel":         "info",
-				"LogFormat":        "text",
-				"ScrapeInterval":   "5m",
-				"S3Endpoint":       "",
-				"S3BucketNames":    "",
-				"S3AccessKey":      "",
-				"S3SecretKey":      "",
-				"S3Region":         "us-east-1",
-				"S3ForcePathStyle": false,
-				"S3SkipTLSVerify":  false,
+			expected: Config{
+				ListenPort:       ":9655",
+				LogLevel:         "info",
+				LogFormat:        "text",
+				ScrapeInterval:   "5m",
+				S3Endpoint:       "",
+				S3BucketNames:    "",
+				S3AccessKey:      "",
+				S3SecretKey:      "",
+				S3Region:         "us-east-1",
+				S3ForcePathStyle: false,
+				S3SkipTLSVerify:  false,
 			},
 		},
 		{
@@ -314,28 +311,26 @@ func TestInitFlags(t *testing.T) {
 				"S3_FORCE_PATH_STYLE": "true",
 				"S3_SKIP_TLS_VERIFY":  "true",
 			},
-			expected: map[string]interface{}{
-				"ListenPort":       ":8080",
-				"LogLevel":         "debug",
-				"LogFormat":        "json",
-				"ScrapeInterval":   "10m",
-				"S3Endpoint":       "https://s3.custom.com",
-				"S3BucketNames":    "bucket1,bucket2",
-				"S3AccessKey":      "test-key",
-				"S3SecretKey":      "test-secret",
-				"S3Region":         "eu-west-1",
-				"S3ForcePathStyle": true,
-				"S3SkipTLSVerify":  true,
+			expected: Config{
+				ListenPort:       ":8080",
+				LogLevel:         "debug",
+				LogFormat:        "json",
+				ScrapeInterval:   "10m",
+				S3Endpoint:       "https://s3.custom.com",
+				S3BucketNames:    "bucket1,bucket2",
+				S3AccessKey:      "test-key",
+				S3SecretKey:      "test-secret",
+				S3Region:         "eu-west-1",
+				S3ForcePathStyle: true,
+				S3SkipTLSVerify:  true,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Reset flag.CommandLine for each test
 			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 
-			// Set environment variables
 			for key, value := range tt.envVars {
 				if value == "" {
 					_ = os.Unsetenv(key)
@@ -349,25 +344,22 @@ func TestInitFlags(t *testing.T) {
 				}
 			}()
 
-			// Call InitFlags
-			InitFlags()
+			cfg := InitFlags()
 
-			// Parse flags (simulating command line with no arguments)
 			err := flag.CommandLine.Parse([]string{})
 			require.NoError(t, err)
 
-			// Verify all expected values
-			assert.Equal(t, tt.expected["ListenPort"], ListenPort)
-			assert.Equal(t, tt.expected["LogLevel"], LogLevel)
-			assert.Equal(t, tt.expected["LogFormat"], LogFormat)
-			assert.Equal(t, tt.expected["ScrapeInterval"], ScrapeInterval)
-			assert.Equal(t, tt.expected["S3Endpoint"], S3Endpoint)
-			assert.Equal(t, tt.expected["S3BucketNames"], S3BucketNames)
-			assert.Equal(t, tt.expected["S3AccessKey"], S3AccessKey)
-			assert.Equal(t, tt.expected["S3SecretKey"], S3SecretKey)
-			assert.Equal(t, tt.expected["S3Region"], S3Region)
-			assert.Equal(t, tt.expected["S3ForcePathStyle"], S3ForcePathStyle)
-			assert.Equal(t, tt.expected["S3SkipTLSVerify"], S3SkipTLSVerify)
+			assert.Equal(t, tt.expected.ListenPort, cfg.ListenPort)
+			assert.Equal(t, tt.expected.LogLevel, cfg.LogLevel)
+			assert.Equal(t, tt.expected.LogFormat, cfg.LogFormat)
+			assert.Equal(t, tt.expected.ScrapeInterval, cfg.ScrapeInterval)
+			assert.Equal(t, tt.expected.S3Endpoint, cfg.S3Endpoint)
+			assert.Equal(t, tt.expected.S3BucketNames, cfg.S3BucketNames)
+			assert.Equal(t, tt.expected.S3AccessKey, cfg.S3AccessKey)
+			assert.Equal(t, tt.expected.S3SecretKey, cfg.S3SecretKey)
+			assert.Equal(t, tt.expected.S3Region, cfg.S3Region)
+			assert.Equal(t, tt.expected.S3ForcePathStyle, cfg.S3ForcePathStyle)
+			assert.Equal(t, tt.expected.S3SkipTLSVerify, cfg.S3SkipTLSVerify)
 		})
 	}
 }
@@ -377,7 +369,6 @@ func TestSetupLogger(t *testing.T) {
 		name           string
 		logLevel       string
 		logFormat      string
-		expectFatal    bool
 		validateOutput func(t *testing.T, output string)
 	}{
 		{
@@ -385,7 +376,6 @@ func TestSetupLogger(t *testing.T) {
 			logLevel:  "info",
 			logFormat: "text",
 			validateOutput: func(t *testing.T, output string) {
-				// Text formatter should output human-readable format
 				assert.Contains(t, output, "level=info")
 				assert.Contains(t, output, "test message")
 			},
@@ -395,7 +385,6 @@ func TestSetupLogger(t *testing.T) {
 			logLevel:  "debug",
 			logFormat: "json",
 			validateOutput: func(t *testing.T, output string) {
-				// JSON formatter should output JSON format
 				assert.Contains(t, output, `"level":"debug"`)
 				assert.Contains(t, output, `"msg":"test message"`)
 			},
@@ -422,19 +411,13 @@ func TestSetupLogger(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set configuration
-			LogLevel = tt.logLevel
-			LogFormat = tt.logFormat
+			cfg := &Config{LogLevel: tt.logLevel, LogFormat: tt.logFormat}
+			cfg.SetupLogger()
 
-			// Setup logger first
-			SetupLogger()
-
-			// Then capture log output (SetupLogger sets output to os.Stdout)
 			var buf bytes.Buffer
 			log.SetOutput(&buf)
 			defer log.SetOutput(os.Stdout)
 
-			// Test logging at the configured level
 			switch tt.logLevel {
 			case "debug":
 				log.Debug("test message")
@@ -446,20 +429,14 @@ func TestSetupLogger(t *testing.T) {
 				log.Error("test message")
 			}
 
-			// Validate output
 			if tt.validateOutput != nil {
-				output := buf.String()
-				tt.validateOutput(t, output)
+				tt.validateOutput(t, buf.String())
 			}
 		})
 	}
 }
 
 func TestSetupLogger_InvalidLevel(t *testing.T) {
-	// This test verifies that SetupLogger calls log.Fatalf for invalid levels
-	// We can't actually test log.Fatalf as it exits the process, but we can
-	// test that ParseLevel returns an error for invalid levels
-
 	invalidLevels := []string{"invalid", "bad", "notexist"}
 
 	for _, level := range invalidLevels {
@@ -471,11 +448,8 @@ func TestSetupLogger_InvalidLevel(t *testing.T) {
 }
 
 func TestSetupLogger_TextFormatterOutput(t *testing.T) {
-	// Test that text formatter produces expected output structure
-	LogLevel = "info"
-	LogFormat = "text"
-
-	SetupLogger()
+	cfg := &Config{LogLevel: "info", LogFormat: "text"}
+	cfg.SetupLogger()
 
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
@@ -487,7 +461,6 @@ func TestSetupLogger_TextFormatterOutput(t *testing.T) {
 	}).Info("test message with fields")
 
 	output := buf.String()
-	// Text formatter includes level, message, and fields
 	assert.Contains(t, output, "level=info")
 	assert.Contains(t, output, "test message with fields")
 	assert.Contains(t, output, "key1=value1")
@@ -495,11 +468,8 @@ func TestSetupLogger_TextFormatterOutput(t *testing.T) {
 }
 
 func TestSetupLogger_JSONFormatterOutput(t *testing.T) {
-	// Test that JSON formatter produces valid JSON output
-	LogLevel = "info"
-	LogFormat = "json"
-
-	SetupLogger()
+	cfg := &Config{LogLevel: "info", LogFormat: "json"}
+	cfg.SetupLogger()
 
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
@@ -511,7 +481,6 @@ func TestSetupLogger_JSONFormatterOutput(t *testing.T) {
 	}).Info("test message with fields")
 
 	output := buf.String()
-	// JSON formatter should produce valid JSON
 	assert.True(t, strings.HasPrefix(output, "{"), "JSON output should start with {")
 	assert.Contains(t, output, `"level":"info"`)
 	assert.Contains(t, output, `"msg":"test message with fields"`)

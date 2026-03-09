@@ -17,7 +17,6 @@ import (
 	"github.com/tropnikovvl/s3-bucket-exporter/internal/controllers"
 )
 
-// Mock implementation for S3 client interface
 type mockS3Client struct {
 	listBucketsFunc   func(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
 	listObjectsV2Func func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
@@ -33,6 +32,16 @@ func (m *mockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjects
 
 func mockFactory(client controllers.S3ClientInterface) func(aws.Config) controllers.S3ClientInterface {
 	return func(aws.Config) controllers.S3ClientInterface { return client }
+}
+
+func testConfig() *config.Config {
+	return &config.Config{
+		S3Endpoint:    "http://localhost",
+		S3AccessKey:   "test",
+		S3SecretKey:   "test",
+		S3Region:      "us-east-1",
+		S3BucketNames: "",
+	}
 }
 
 func TestHealthHandler(t *testing.T) {
@@ -70,37 +79,34 @@ func TestUpdateMetrics(t *testing.T) {
 		},
 	}
 
-	config.S3Endpoint = "http://localhost"
-	config.S3AccessKey = "test"
-	config.S3SecretKey = "test"
-	config.S3Region = "us-east-1"
-	config.S3BucketNames = "test-bucket"
+	cfg := testConfig()
+	cfg.S3BucketNames = "test-bucket"
 
-	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
 	interval := 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go updateMetrics(ctx, collector, interval, mockFactory(mockClient))
+	go updateMetrics(ctx, collector, cfg, interval, mockFactory(mockClient))
 
 	time.Sleep(interval * 2)
 
-	metrics, err := collector.GetMetrics()
+	m, err := collector.GetMetrics()
 
 	assert.NoError(t, err, "Expected no error with mock client")
-	assert.True(t, metrics.EndpointStatus, "EndpointStatus should be true")
-	storageMetrics := metrics.StorageClasses["STANDARD"]
+	assert.True(t, m.EndpointStatus, "EndpointStatus should be true")
+	storageMetrics := m.StorageClasses["STANDARD"]
 	assert.Equal(t, 1024.0, storageMetrics.Size, "Total size should match")
 	assert.Equal(t, 1.0, storageMetrics.ObjectNumber, "Total object number should match")
-	require.Len(t, metrics.S3Buckets, 1, "Should have exactly one bucket")
+	require.Len(t, m.S3Buckets, 1, "Should have exactly one bucket")
 
-	bucket := metrics.S3Buckets[0]
+	bucket := m.S3Buckets[0]
 	assert.Equal(t, "test-bucket", bucket.BucketName, "BucketName should match")
 	bucketMetrics := bucket.StorageClasses["STANDARD"]
 	assert.Equal(t, 1024.0, bucketMetrics.Size, "Bucket size should match")
 	assert.Equal(t, 1.0, bucketMetrics.ObjectNumber, "Bucket object number should match")
-	assert.Greater(t, metrics.TotalListDuration, time.Duration(0), "TotalListDuration should be positive")
+	assert.Greater(t, m.TotalListDuration, time.Duration(0), "TotalListDuration should be positive")
 	assert.Greater(t, bucket.ListDuration, time.Duration(0), "Bucket ListDuration should be positive")
 }
 
@@ -126,18 +132,15 @@ func TestUpdateMetricsContextCancellation(t *testing.T) {
 		},
 	}
 
-	config.S3Endpoint = "http://localhost"
-	config.S3AccessKey = "test"
-	config.S3SecretKey = "test"
-	config.S3Region = "us-east-1"
-	config.S3BucketNames = "test-bucket"
+	cfg := testConfig()
+	cfg.S3BucketNames = "test-bucket"
 
-	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
 	interval := 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go updateMetrics(ctx, collector, interval, mockFactory(mockClient))
+	go updateMetrics(ctx, collector, cfg, interval, mockFactory(mockClient))
 
 	time.Sleep(interval / 2)
 
@@ -179,20 +182,16 @@ func TestUpdateMetricsImmediateCollection(t *testing.T) {
 		},
 	}
 
-	config.S3Endpoint = "http://localhost"
-	config.S3AccessKey = "test"
-	config.S3SecretKey = "test"
-	config.S3Region = "us-east-1"
-	config.S3BucketNames = ""
+	cfg := testConfig()
 
-	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
 	interval := 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	startTime := time.Now()
-	go updateMetrics(ctx, collector, interval, mockFactory(mockClient))
+	go updateMetrics(ctx, collector, cfg, interval, mockFactory(mockClient))
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -233,25 +232,21 @@ func TestUpdateMetricsContextTimeout(t *testing.T) {
 		},
 	}
 
-	config.S3Endpoint = "http://localhost"
-	config.S3AccessKey = "test"
-	config.S3SecretKey = "test"
-	config.S3Region = "us-east-1"
-	config.S3BucketNames = ""
+	cfg := testConfig()
 
-	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
 	interval := 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go updateMetrics(ctx, collector, interval, mockFactory(blockingClient))
+	go updateMetrics(ctx, collector, cfg, interval, mockFactory(blockingClient))
 
 	time.Sleep(150 * time.Millisecond)
 
-	metrics, err := collector.GetMetrics()
+	m, err := collector.GetMetrics()
 
 	if err == nil {
-		assert.False(t, metrics.EndpointStatus, "Endpoint should be marked as down due to timeout")
+		assert.False(t, m.EndpointStatus, "Endpoint should be marked as down due to timeout")
 	}
 }

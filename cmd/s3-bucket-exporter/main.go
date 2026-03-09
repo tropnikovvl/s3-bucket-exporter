@@ -19,13 +19,13 @@ import (
 	"github.com/tropnikovvl/s3-bucket-exporter/internal/controllers"
 )
 
-func updateMetrics(ctx context.Context, collector *controllers.S3Collector, interval time.Duration, clientFactory func(aws.Config) controllers.S3ClientInterface) {
+func updateMetrics(ctx context.Context, collector *controllers.S3Collector, cfg *config.Config, interval time.Duration, clientFactory func(aws.Config) controllers.S3ClientInterface) {
 	authCfg := auth.AuthConfig{
-		Region:        config.S3Region,
-		Endpoint:      config.S3Endpoint,
-		AccessKey:     config.S3AccessKey,
-		SecretKey:     config.S3SecretKey,
-		SkipTLSVerify: config.S3SkipTLSVerify,
+		Region:        cfg.S3Region,
+		Endpoint:      cfg.S3Endpoint,
+		AccessKey:     cfg.S3AccessKey,
+		SecretKey:     cfg.S3SecretKey,
+		SkipTLSVerify: cfg.S3SkipTLSVerify,
 	}
 
 	authCfg.Method = auth.DetectAuthMethod(authCfg)
@@ -41,7 +41,7 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, inte
 			return
 		}
 
-		collector.UpdateMetrics(iterCtx, clientFactory(awsCfg), config.S3Region, config.S3BucketNames)
+		collector.UpdateMetrics(iterCtx, clientFactory(awsCfg), cfg.S3BucketNames)
 	}
 
 	collectMetrics()
@@ -67,26 +67,26 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func main() {
-	config.InitFlags()
+	cfg := config.InitFlags()
 	flag.Parse()
 
-	if err := config.ValidateConfig(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Configuration validation failed: %v", err)
 	}
 
-	config.SetupLogger()
+	cfg.SetupLogger()
 
-	interval, err := time.ParseDuration(config.ScrapeInterval)
+	interval, err := time.ParseDuration(cfg.ScrapeInterval)
 	if err != nil {
-		log.Fatalf("Invalid scrape interval: %s", config.ScrapeInterval)
+		log.Fatalf("Invalid scrape interval: %s", cfg.ScrapeInterval)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
-	go updateMetrics(ctx, collector, interval, func(cfg aws.Config) controllers.S3ClientInterface {
-		return s3.NewFromConfig(cfg, func(o *s3.Options) {
-			o.UsePathStyle = config.S3ForcePathStyle
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	go updateMetrics(ctx, collector, cfg, interval, func(awsCfg aws.Config) controllers.S3ClientInterface {
+		return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+			o.UsePathStyle = cfg.S3ForcePathStyle
 		})
 	})
 
@@ -96,7 +96,7 @@ func main() {
 	http.HandleFunc("/health", healthHandler)
 
 	srv := &http.Server{
-		Addr:         config.ListenPort,
+		Addr:         cfg.ListenPort,
 		ReadTimeout:  35 * time.Second,
 		WriteTimeout: 35 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -105,11 +105,11 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	log.Infof("Starting server on %s", config.ListenPort)
-	if config.S3BucketNames != "" {
-		log.Infof("Monitoring buckets: %s in %s region", config.S3BucketNames, config.S3Region)
+	log.Infof("Starting server on %s", cfg.ListenPort)
+	if cfg.S3BucketNames != "" {
+		log.Infof("Monitoring buckets: %s in %s region", cfg.S3BucketNames, cfg.S3Region)
 	} else {
-		log.Infof("Monitoring all buckets in %s region", config.S3Region)
+		log.Infof("Monitoring all buckets in %s region", cfg.S3Region)
 	}
 
 	go func() {

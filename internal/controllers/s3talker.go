@@ -105,14 +105,12 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 
 	wg.Wait()
 
+	summary.FailedBucketCount = len(errs)
 	if len(errs) > 0 {
 		log.Errorf("Encountered errors while processing buckets: %v", errs)
 	}
 
-	if len(summary.S3Buckets) > 0 {
-		summary.EndpointStatus = true
-	}
-
+	summary.EndpointStatus = len(errs) == 0 && len(summary.S3Buckets) > 0
 	summary.BucketCount = len(bucketNames)
 	summary.TotalListDuration = time.Since(start)
 	return summary, nil

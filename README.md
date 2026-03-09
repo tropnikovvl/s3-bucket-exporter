@@ -5,23 +5,29 @@ Works with AWS and any S3 compatible endpoints (Minio, Ceph, Localstack, etc).
 
 ## Key Features
 
-- **Modular Authentication**: Separate authentication module with support for multiple auth methods
-- **Flexible Configuration**: Supports both environment variables and command-line arguments
-- **Comprehensive Metrics**: Provides detailed metrics at both bucket and storage class level
+- **Multiple Auth Methods**: Access keys, IAM role, Web Identity (IRSA), EC2 instance profile — auto-detected
+- **Credential Caching**: Credentials are cached and refreshed proactively before expiry
+- **Parallel Collection**: Bucket metrics are collected concurrently
+- **Partial Failure Visibility**: `s3_failed_bucket_count` metric shows how many buckets failed without hiding partial results
+- **Flexible Configuration**: Supports both environment variables and command-line flags
+- **Per Storage Class**: Metrics broken down by storage class (STANDARD, GLACIER, etc.)
+- **S3-Compatible**: Works with AWS and any S3-compatible endpoint (MinIO, Ceph, Localstack, etc.)
 
 ## Metrics
 
-Total metrics:
-  - `s3_bucket_count`
-  - `s3_total_size`
-  - `s3_total_object_number`
-  - `s3_list_total_duration_seconds`
-  - `s3_auth_attempts_total`
+Endpoint-level metrics:
+  - `s3_endpoint_up` — 1 if all buckets were listed successfully, 0 otherwise
+  - `s3_bucket_count` — total number of monitored buckets
+  - `s3_failed_bucket_count` — number of buckets that failed to list
+  - `s3_total_size` — total size across all buckets, by storage class
+  - `s3_total_object_number` — total object count across all buckets, by storage class
+  - `s3_list_total_duration_seconds` — total time spent listing all buckets
+  - `s3_auth_attempts_total` — authentication attempts by method and status
 
-Bucket level metrics:
-  - `s3_bucket_size`
-  - `s3_bucket_object_number`
-  - `s3_list_duration_seconds`
+Bucket-level metrics:
+  - `s3_bucket_size` — size per bucket and storage class
+  - `s3_bucket_object_number` — object count per bucket and storage class
+  - `s3_list_duration_seconds` — time spent listing objects in a bucket
 
 ## Getting Started
 
@@ -95,18 +101,20 @@ The exporter supports both command-line arguments and environment variables (arg
 
 ## Authentication
 
-The exporter uses a modular authentication system that automatically detects the appropriate authentication method based on the provided configuration.
+The exporter automatically detects the authentication method based on the provided configuration. Credentials are cached and refreshed proactively before expiry.
 
 ### Supported Authentication Methods
 
-1. **Access Keys** - Using AWS access key and secret key
-2. **IAM Role** - Using EC2/ECS instance role
-3. **Web Identity** - Using web identity token (e.g., for Kubernetes)
-4. **IAM Instance Profile** - For EC2 instances with attached IAM roles
+| Method | When used | Cache TTL |
+|--------|-----------|-----------|
+| **Access Keys** | `S3_ACCESS_KEY` + `S3_SECRET_KEY` set | Never expires |
+| **IAM Role** (assume role) | `S3_ROLE_ARN` set | 45 min |
+| **Web Identity** | `S3_ROLE_ARN` + `S3_WEB_IDENTITY` set | 45 min |
+| **IAM Instance Profile** | No credentials provided | 30 min |
 
 ### Security Features
 
-- **TLS Verification**: Optional TLS certificate verification for secure connections
+- **TLS Verification**: Optional TLS certificate verification (`S3_SKIP_TLS_VERIFY`)
 - **Credential Protection**: Credentials are never logged or exposed in metrics
 
 ## Prometheus Configuration

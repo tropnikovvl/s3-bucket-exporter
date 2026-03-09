@@ -48,6 +48,47 @@ func TestS3UsageInfo_SingleBucket(t *testing.T) {
 	assert.Len(t, summary.S3Buckets, 1)
 }
 
+func TestS3UsageInfo_FailedBucket(t *testing.T) {
+	mockClient := new(MockS3Client)
+
+	// bucket1 succeeds, bucket2 fails
+	mockClient.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
+		Bucket:            aws.String("bucket1"),
+		ContinuationToken: (*string)(nil),
+	}, mock.Anything).Return(&s3.ListObjectsV2Output{
+		Contents:    []types.Object{{Size: aws.Int64(1024), StorageClass: "STANDARD"}},
+		IsTruncated: aws.Bool(false),
+	}, nil)
+
+	mockClient.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
+		Bucket:            aws.String("bucket2"),
+		ContinuationToken: (*string)(nil),
+	}, mock.Anything).Return((*s3.ListObjectsV2Output)(nil), assert.AnError)
+
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2")
+
+	assert.NoError(t, err)
+	assert.False(t, summary.EndpointStatus, "EndpointStatus should be false when any bucket fails")
+	assert.Equal(t, 1, summary.FailedBucketCount, "FailedBucketCount should be 1")
+	assert.Equal(t, 2, summary.BucketCount, "BucketCount should reflect total requested buckets")
+	assert.Len(t, summary.S3Buckets, 1, "Only one bucket should be in results")
+	assert.Equal(t, "bucket1", summary.S3Buckets[0].BucketName)
+}
+
+func TestS3UsageInfo_AllBucketsFail(t *testing.T) {
+	mockClient := new(MockS3Client)
+	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+		Return((*s3.ListObjectsV2Output)(nil), assert.AnError)
+
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2,bucket3")
+
+	assert.NoError(t, err)
+	assert.False(t, summary.EndpointStatus)
+	assert.Equal(t, 3, summary.FailedBucketCount)
+	assert.Equal(t, 3, summary.BucketCount)
+	assert.Empty(t, summary.S3Buckets)
+}
+
 func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 	mockClient := new(MockS3Client)
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
@@ -151,16 +192,6 @@ func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 }
 
 func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
-	creds := aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
-		"test-access-key",
-		"test-secret-key",
-		"",
-	))
-	retrieved, err := creds.Retrieve(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, "test-access-key", retrieved.AccessKeyID)
-	assert.Equal(t, "test-secret-key", retrieved.SecretAccessKey)
-
 	mockClient := new(MockS3Client)
 	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
 		Contents: []types.Object{
@@ -237,4 +268,12 @@ func TestContextPropagationThroughChain(t *testing.T) {
 	assert.True(t, summary.EndpointStatus)
 	assert.NotNil(t, capturedCtx)
 	assert.Equal(t, "test-value", capturedCtx.Value(testContextKey))
+}
+
+func TestS3UsageInfo_WithAccessKeysCredentials(t *testing.T) {
+	creds := aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("test-access-key", "test-secret-key", ""))
+	retrieved, err := creds.Retrieve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "test-access-key", retrieved.AccessKeyID)
+	assert.Equal(t, "test-secret-key", retrieved.SecretAccessKey)
 }

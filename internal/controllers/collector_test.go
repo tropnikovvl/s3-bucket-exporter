@@ -20,7 +20,8 @@ func TestS3Collector(t *testing.T) {
 	collector := NewS3Collector(s3Endpoint, s3Region)
 	collector.metricsMutex.Lock()
 	collector.metrics = S3Summary{
-		EndpointStatus: true,
+		EndpointStatus:    true,
+		FailedBucketCount: 0,
 		StorageClasses: map[string]StorageClassMetrics{
 			"STANDARD": {Size: 1024.0, ObjectNumber: 1.0},
 		},
@@ -39,7 +40,7 @@ func TestS3Collector(t *testing.T) {
 	ch := make(chan prometheus.Metric)
 	done := make(chan bool)
 
-	var metrics []prometheus.Metric
+	var collectedMetrics []prometheus.Metric
 
 	go func() {
 		expectedExact := []struct {
@@ -51,6 +52,7 @@ func TestS3Collector(t *testing.T) {
 			{"s3_total_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1024.0},
 			{"s3_total_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1.0},
 			{"s3_bucket_count", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 1.0},
+			{"s3_failed_bucket_count", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 0.0},
 			{"s3_bucket_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1024.0},
 			{"s3_bucket_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1.0},
 		}
@@ -66,7 +68,7 @@ func TestS3Collector(t *testing.T) {
 		var matchedExactCount, matchedDurationCount int
 
 		for metric := range ch {
-			metrics = append(metrics, metric)
+			collectedMetrics = append(collectedMetrics, metric)
 
 			dtoMetric := &io_prometheus_client.Metric{}
 			err := metric.Write(dtoMetric)
@@ -88,7 +90,7 @@ func TestS3Collector(t *testing.T) {
 
 		assert.Equal(t, len(expectedExact), matchedExactCount, "Not all expected exact metrics were found")
 		assert.Equal(t, len(expectedDuration), matchedDurationCount, "Not all expected duration metrics were found")
-		assert.Equal(t, len(expectedExact)+len(expectedDuration), len(metrics), "Mismatch in number of metrics")
+		assert.Equal(t, len(expectedExact)+len(expectedDuration), len(collectedMetrics), "Mismatch in number of metrics")
 		done <- true
 	}()
 
@@ -134,13 +136,14 @@ func matchMetricDuration(exp struct {
 func TestGetMetrics(t *testing.T) {
 	collector := NewS3Collector("http://localhost", "us-east-1")
 
-	metrics, err := collector.GetMetrics()
+	m, err := collector.GetMetrics()
 	assert.NoError(t, err)
-	assert.False(t, metrics.EndpointStatus)
-	assert.Equal(t, 0, metrics.BucketCount)
+	assert.False(t, m.EndpointStatus)
+	assert.Equal(t, 0, m.BucketCount)
 
 	testMetrics := S3Summary{
-		EndpointStatus: true,
+		EndpointStatus:    true,
+		FailedBucketCount: 0,
 		StorageClasses: map[string]StorageClassMetrics{
 			"STANDARD": {Size: 2048.0, ObjectNumber: 5.0},
 		},
@@ -157,22 +160,22 @@ func TestGetMetrics(t *testing.T) {
 	collector.err = nil
 	collector.metricsMutex.Unlock()
 
-	metrics, err = collector.GetMetrics()
+	m, err = collector.GetMetrics()
 	assert.NoError(t, err)
-	assert.True(t, metrics.EndpointStatus)
-	assert.Equal(t, 2, metrics.BucketCount)
-	assert.Equal(t, 2048.0, metrics.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, 5.0, metrics.StorageClasses["STANDARD"].ObjectNumber)
-	assert.Len(t, metrics.S3Buckets, 2)
-	assert.Equal(t, "test-bucket-1", metrics.S3Buckets[0].BucketName)
-	assert.Equal(t, "test-bucket-2", metrics.S3Buckets[1].BucketName)
+	assert.True(t, m.EndpointStatus)
+	assert.Equal(t, 2, m.BucketCount)
+	assert.Equal(t, 2048.0, m.StorageClasses["STANDARD"].Size)
+	assert.Equal(t, 5.0, m.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Len(t, m.S3Buckets, 2)
+	assert.Equal(t, "test-bucket-1", m.S3Buckets[0].BucketName)
+	assert.Equal(t, "test-bucket-2", m.S3Buckets[1].BucketName)
 
 	testError := errors.New("test error")
 	collector.metricsMutex.Lock()
 	collector.err = testError
 	collector.metricsMutex.Unlock()
 
-	metrics, err = collector.GetMetrics()
+	m, err = collector.GetMetrics()
 	assert.Error(t, err)
 	assert.Equal(t, testError, err)
 }
@@ -202,7 +205,7 @@ func TestGetMetricsConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 
-	metrics, err := collector.GetMetrics()
+	m, err := collector.GetMetrics()
 	assert.NoError(t, err)
-	assert.True(t, metrics.EndpointStatus)
+	assert.True(t, m.EndpointStatus)
 }
