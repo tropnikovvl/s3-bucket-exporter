@@ -44,9 +44,8 @@ func TestDetectAuthMethod(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := tt.config
-			DetectAuthMethod(&cfg)
-			assert.Equal(t, tt.expectedMethod, cfg.Method)
+			method := DetectAuthMethod(tt.config)
+			assert.Equal(t, tt.expectedMethod, method)
 		})
 	}
 }

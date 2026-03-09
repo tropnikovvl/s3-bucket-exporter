@@ -6,18 +6,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func SetupLogger() {
-	if LogFormat == "json" {
+func (c *Config) SetupLogger() {
+	if c.LogFormat == "json" {
 		log.SetFormatter(&log.JSONFormatter{})
 	} else {
 		log.SetFormatter(&log.TextFormatter{})
 	}
 
-	level, err := log.ParseLevel(LogLevel)
+	level, err := log.ParseLevel(c.LogLevel)
 	if err != nil {
-		log.Fatalf("Invalid log level: %s", LogLevel)
+		log.Fatalf("Invalid log level: %s", c.LogLevel)
 	}
 	log.SetLevel(level)
-
 	log.SetOutput(os.Stdout)
 }
