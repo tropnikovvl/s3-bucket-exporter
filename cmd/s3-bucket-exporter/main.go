@@ -32,8 +32,7 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, inte
 	cachedAuth := auth.NewCachedAWSAuth(authCfg)
 
 	collectMetrics := func() {
-		timeoutDuration := time.Duration(float64(interval) * 0.9)
-		iterCtx, cancel := context.WithTimeout(ctx, timeoutDuration)
+		iterCtx, cancel := context.WithTimeout(ctx, interval*9/10)
 		defer cancel()
 
 		awsCfg, err := cachedAuth.GetConfig(iterCtx)
@@ -62,9 +61,7 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, inte
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("OK")); err != nil {
-		http.Error(w, "Failed to write response", http.StatusInternalServerError)
 		log.Errorf("Error writing health response: %v", err)
 	}
 }
@@ -85,7 +82,6 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	collector := controllers.NewS3Collector(config.S3Endpoint, config.S3Region)
 	go updateMetrics(ctx, collector, interval, func(cfg aws.Config) controllers.S3ClientInterface {
@@ -109,14 +105,14 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	go func() {
-		log.Infof("Starting server on %s", config.ListenPort)
-		if config.S3BucketNames != "" {
-			log.Infof("Monitoring buckets: %s in %s region", config.S3BucketNames, config.S3Region)
-		} else {
-			log.Infof("Monitoring all buckets in %s region", config.S3Region)
-		}
+	log.Infof("Starting server on %s", config.ListenPort)
+	if config.S3BucketNames != "" {
+		log.Infof("Monitoring buckets: %s in %s region", config.S3BucketNames, config.S3Region)
+	} else {
+		log.Infof("Monitoring all buckets in %s region", config.S3Region)
+	}
 
+	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}
