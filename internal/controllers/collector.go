@@ -10,13 +10,16 @@ import (
 )
 
 type StorageClassMetrics struct {
-	Size         float64
-	ObjectNumber float64
+	CurrentSize            float64
+	CurrentObjectNumber    float64
+	NoncurrentSize         float64
+	NoncurrentObjectNumber float64
 }
 
 type Bucket struct {
 	BucketName     string
 	StorageClasses map[string]StorageClassMetrics
+	DeleteMarkers  float64
 	ListDuration   time.Duration
 }
 
@@ -24,6 +27,7 @@ type S3Summary struct {
 	EndpointStatus    bool
 	StorageClasses    map[string]StorageClassMetrics
 	S3Buckets         []Bucket
+	DeleteMarkers     float64
 	BucketCount       int
 	FailedBucketCount int
 	TotalListDuration time.Duration
@@ -38,15 +42,17 @@ type S3Collector struct {
 }
 
 var metricsDesc = map[string]*prometheus.Desc{
-	"up":              prometheus.NewDesc("s3_endpoint_up", "Connection to S3 successful", []string{"s3Endpoint", "s3Region"}, nil),
-	"total_size":      prometheus.NewDesc("s3_total_size", "S3 Total Bucket Size", []string{"s3Endpoint", "s3Region", "storageClass"}, nil),
-	"total_objects":   prometheus.NewDesc("s3_total_object_number", "S3 Total Object Number", []string{"s3Endpoint", "s3Region", "storageClass"}, nil),
-	"bucket_count":    prometheus.NewDesc("s3_bucket_count", "S3 Total Number of Buckets", []string{"s3Endpoint", "s3Region"}, nil),
-	"failed_buckets":  prometheus.NewDesc("s3_failed_bucket_count", "Number of buckets that failed to list", []string{"s3Endpoint", "s3Region"}, nil),
-	"total_duration":  prometheus.NewDesc("s3_list_total_duration_seconds", "Total time spent listing objects across all buckets", []string{"s3Endpoint", "s3Region"}, nil),
-	"bucket_size":     prometheus.NewDesc("s3_bucket_size", "S3 Bucket Size", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass"}, nil),
-	"bucket_objects":  prometheus.NewDesc("s3_bucket_object_number", "S3 Bucket Object Number", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass"}, nil),
-	"bucket_duration": prometheus.NewDesc("s3_list_duration_seconds", "Time spent listing objects in bucket", []string{"s3Endpoint", "s3Region", "bucketName"}, nil),
+	"up":                    prometheus.NewDesc("s3_endpoint_up", "Connection to S3 successful", []string{"s3Endpoint", "s3Region"}, nil),
+	"total_size":            prometheus.NewDesc("s3_total_size", "S3 Total Bucket Size", []string{"s3Endpoint", "s3Region", "storageClass", "versionStatus"}, nil),
+	"total_objects":         prometheus.NewDesc("s3_total_object_number", "S3 Total Object Number", []string{"s3Endpoint", "s3Region", "storageClass", "versionStatus"}, nil),
+	"total_delete_markers":  prometheus.NewDesc("s3_total_delete_markers", "S3 Total Delete Markers", []string{"s3Endpoint", "s3Region"}, nil),
+	"bucket_count":          prometheus.NewDesc("s3_bucket_count", "S3 Total Number of Buckets", []string{"s3Endpoint", "s3Region"}, nil),
+	"failed_buckets":        prometheus.NewDesc("s3_failed_bucket_count", "Number of buckets that failed to list", []string{"s3Endpoint", "s3Region"}, nil),
+	"total_duration":        prometheus.NewDesc("s3_list_total_duration_seconds", "Total time spent listing objects across all buckets", []string{"s3Endpoint", "s3Region"}, nil),
+	"bucket_size":           prometheus.NewDesc("s3_bucket_size", "S3 Bucket Size", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass", "versionStatus"}, nil),
+	"bucket_objects":        prometheus.NewDesc("s3_bucket_object_number", "S3 Bucket Object Number", []string{"s3Endpoint", "s3Region", "bucketName", "storageClass", "versionStatus"}, nil),
+	"bucket_delete_markers": prometheus.NewDesc("s3_bucket_delete_markers", "S3 Bucket Delete Markers", []string{"s3Endpoint", "s3Region", "bucketName"}, nil),
+	"bucket_duration":       prometheus.NewDesc("s3_list_duration_seconds", "Time spent listing objects in bucket", []string{"s3Endpoint", "s3Region", "bucketName"}, nil),
 }
 
 // NewS3Collector creates a new S3Collector
@@ -83,18 +89,24 @@ func (c *S3Collector) Collect(ch chan<- prometheus.Metric) {
 	log.Debugf("Cached S3 metrics %s: %+v", c.s3Endpoint, m)
 
 	for class, s3Metrics := range m.StorageClasses {
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.Size, c.s3Endpoint, c.s3Region, class)
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.ObjectNumber, c.s3Endpoint, c.s3Region, class)
+		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.CurrentSize, c.s3Endpoint, c.s3Region, class, "current")
+		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.NoncurrentSize, c.s3Endpoint, c.s3Region, class, "noncurrent")
+		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.CurrentObjectNumber, c.s3Endpoint, c.s3Region, class, "current")
+		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.NoncurrentObjectNumber, c.s3Endpoint, c.s3Region, class, "noncurrent")
 	}
+	ch <- prometheus.MustNewConstMetric(metricsDesc["total_delete_markers"], prometheus.GaugeValue, m.DeleteMarkers, c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_count"], prometheus.GaugeValue, float64(m.BucketCount), c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["failed_buckets"], prometheus.GaugeValue, float64(m.FailedBucketCount), c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["total_duration"], prometheus.GaugeValue, m.TotalListDuration.Seconds(), c.s3Endpoint, c.s3Region)
 
 	for _, bucket := range m.S3Buckets {
 		for class, s3Metrics := range bucket.StorageClasses {
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_size"], prometheus.GaugeValue, s3Metrics.Size, c.s3Endpoint, c.s3Region, bucket.BucketName, class)
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_objects"], prometheus.GaugeValue, s3Metrics.ObjectNumber, c.s3Endpoint, c.s3Region, bucket.BucketName, class)
+			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_size"], prometheus.GaugeValue, s3Metrics.CurrentSize, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "current")
+			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_size"], prometheus.GaugeValue, s3Metrics.NoncurrentSize, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "noncurrent")
+			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_objects"], prometheus.GaugeValue, s3Metrics.CurrentObjectNumber, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "current")
+			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_objects"], prometheus.GaugeValue, s3Metrics.NoncurrentObjectNumber, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "noncurrent")
 		}
+		ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_delete_markers"], prometheus.GaugeValue, bucket.DeleteMarkers, c.s3Endpoint, c.s3Region, bucket.BucketName)
 		ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_duration"], prometheus.GaugeValue, bucket.ListDuration.Seconds(), c.s3Endpoint, c.s3Region, bucket.BucketName)
 	}
 }
