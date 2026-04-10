@@ -18,16 +18,16 @@ import (
 )
 
 type mockS3Client struct {
-	listBucketsFunc   func(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
-	listObjectsV2Func func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	listBucketsFunc        func(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
+	listObjectVersionsFunc func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error)
 }
 
 func (m *mockS3Client) ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
 	return m.listBucketsFunc(ctx, params, optFns...)
 }
 
-func (m *mockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
-	return m.listObjectsV2Func(ctx, params, optFns...)
+func (m *mockS3Client) ListObjectVersions(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+	return m.listObjectVersionsFunc(ctx, params, optFns...)
 }
 
 func mockFactory(client controllers.S3ClientInterface) func(aws.Config) controllers.S3ClientInterface {
@@ -65,13 +65,14 @@ func TestUpdateMetrics(t *testing.T) {
 				},
 			}, nil
 		},
-		listObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
-			return &s3.ListObjectsV2Output{
-				Contents: []types.Object{
+		listObjectVersionsFunc: func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+			return &s3.ListObjectVersionsOutput{
+				Versions: []types.ObjectVersion{
 					{
 						Key:          aws.String("test-object"),
 						Size:         aws.Int64(1024),
-						StorageClass: types.ObjectStorageClass("STANDARD"),
+						StorageClass: types.ObjectVersionStorageClass("STANDARD"),
+						IsLatest:     aws.Bool(true),
 					},
 				},
 				IsTruncated: aws.Bool(false),
@@ -97,15 +98,17 @@ func TestUpdateMetrics(t *testing.T) {
 	assert.NoError(t, err, "Expected no error with mock client")
 	assert.True(t, m.EndpointStatus, "EndpointStatus should be true")
 	storageMetrics := m.StorageClasses["STANDARD"]
-	assert.Equal(t, 1024.0, storageMetrics.Size, "Total size should match")
-	assert.Equal(t, 1.0, storageMetrics.ObjectNumber, "Total object number should match")
+	assert.Equal(t, 1024.0, storageMetrics.CurrentSize, "Current size should match")
+	assert.Equal(t, 1.0, storageMetrics.CurrentObjectNumber, "Current object number should match")
+	assert.Equal(t, 0.0, storageMetrics.NoncurrentSize, "Noncurrent size should be zero")
+	assert.Equal(t, 0.0, m.DeleteMarkers, "Delete markers should be zero")
 	require.Len(t, m.S3Buckets, 1, "Should have exactly one bucket")
 
 	bucket := m.S3Buckets[0]
 	assert.Equal(t, "test-bucket", bucket.BucketName, "BucketName should match")
 	bucketMetrics := bucket.StorageClasses["STANDARD"]
-	assert.Equal(t, 1024.0, bucketMetrics.Size, "Bucket size should match")
-	assert.Equal(t, 1.0, bucketMetrics.ObjectNumber, "Bucket object number should match")
+	assert.Equal(t, 1024.0, bucketMetrics.CurrentSize, "Bucket current size should match")
+	assert.Equal(t, 1.0, bucketMetrics.CurrentObjectNumber, "Bucket current object number should match")
 	assert.Greater(t, m.TotalListDuration, time.Duration(0), "TotalListDuration should be positive")
 	assert.Greater(t, bucket.ListDuration, time.Duration(0), "Bucket ListDuration should be positive")
 }
@@ -124,9 +127,9 @@ func TestUpdateMetricsContextCancellation(t *testing.T) {
 				},
 			}, nil
 		},
-		listObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
-			return &s3.ListObjectsV2Output{
-				Contents:    []types.Object{},
+		listObjectVersionsFunc: func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+			return &s3.ListObjectVersionsOutput{
+				Versions:    []types.ObjectVersion{},
 				IsTruncated: aws.Bool(false),
 			}, nil
 		},
@@ -174,9 +177,9 @@ func TestUpdateMetricsImmediateCollection(t *testing.T) {
 				},
 			}, nil
 		},
-		listObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
-			return &s3.ListObjectsV2Output{
-				Contents:    []types.Object{},
+		listObjectVersionsFunc: func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+			return &s3.ListObjectVersionsOutput{
+				Versions:    []types.ObjectVersion{},
 				IsTruncated: aws.Bool(false),
 			}, nil
 		},
@@ -224,9 +227,9 @@ func TestUpdateMetricsContextTimeout(t *testing.T) {
 				}, nil
 			}
 		},
-		listObjectsV2Func: func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
-			return &s3.ListObjectsV2Output{
-				Contents:    []types.Object{},
+		listObjectVersionsFunc: func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
+			return &s3.ListObjectVersionsOutput{
+				Versions:    []types.ObjectVersion{},
 				IsTruncated: aws.Bool(false),
 			}, nil
 		},

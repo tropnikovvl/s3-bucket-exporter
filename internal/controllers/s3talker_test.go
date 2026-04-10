@@ -24,17 +24,17 @@ func (m *MockS3Client) ListBuckets(ctx context.Context, params *s3.ListBucketsIn
 	return args.Get(0).(*s3.ListBucketsOutput), args.Error(1)
 }
 
-func (m *MockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (m *MockS3Client) ListObjectVersions(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error) {
 	args := m.Called(ctx, params, optFns)
-	return args.Get(0).(*s3.ListObjectsV2Output), args.Error(1)
+	return args.Get(0).(*s3.ListObjectVersionsOutput), args.Error(1)
 }
 
 func TestS3UsageInfo_SingleBucket(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(1024), StorageClass: "STANDARD"},
-			{Size: aws.Int64(2048), StorageClass: "STANDARD"},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+			{Size: aws.Int64(2048), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -43,27 +43,60 @@ func TestS3UsageInfo_SingleBucket(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-	assert.Equal(t, float64(3072), summary.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(2), summary.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, float64(3072), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(2), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
+	assert.Equal(t, float64(0), summary.StorageClasses["STANDARD"].NoncurrentSize)
+	assert.Equal(t, float64(0), summary.StorageClasses["STANDARD"].NoncurrentObjectNumber)
+	assert.Equal(t, float64(0), summary.DeleteMarkers)
 	assert.Len(t, summary.S3Buckets, 1)
+}
+
+func TestS3UsageInfo_VersionedBucket(t *testing.T) {
+	mockClient := new(MockS3Client)
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+			{Size: aws.Int64(512), StorageClass: "STANDARD", IsLatest: aws.Bool(false)},
+			{Size: aws.Int64(256), StorageClass: "STANDARD", IsLatest: aws.Bool(false)},
+		},
+		DeleteMarkers: []types.DeleteMarkerEntry{
+			{IsLatest: aws.Bool(true), Key: aws.String("deleted-file.txt")},
+			{IsLatest: aws.Bool(false), Key: aws.String("old-deleted.txt")},
+		},
+		IsTruncated: aws.Bool(false),
+	}, nil)
+
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1")
+
+	assert.NoError(t, err)
+	assert.True(t, summary.EndpointStatus)
+	assert.Equal(t, float64(1024), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
+	assert.Equal(t, float64(768), summary.StorageClasses["STANDARD"].NoncurrentSize)
+	assert.Equal(t, float64(2), summary.StorageClasses["STANDARD"].NoncurrentObjectNumber)
+	assert.Equal(t, float64(2), summary.DeleteMarkers)
+	assert.Equal(t, float64(2), summary.S3Buckets[0].DeleteMarkers)
 }
 
 func TestS3UsageInfo_FailedBucket(t *testing.T) {
 	mockClient := new(MockS3Client)
 
-	// bucket1 succeeds, bucket2 fails
-	mockClient.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
-		Bucket:            aws.String("bucket1"),
-		ContinuationToken: (*string)(nil),
-	}, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents:    []types.Object{{Size: aws.Int64(1024), StorageClass: "STANDARD"}},
+	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
+		Bucket:          aws.String("bucket1"),
+		KeyMarker:       (*string)(nil),
+		VersionIdMarker: (*string)(nil),
+	}, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	mockClient.On("ListObjectsV2", mock.Anything, &s3.ListObjectsV2Input{
-		Bucket:            aws.String("bucket2"),
-		ContinuationToken: (*string)(nil),
-	}, mock.Anything).Return((*s3.ListObjectsV2Output)(nil), assert.AnError)
+	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
+		Bucket:          aws.String("bucket2"),
+		KeyMarker:       (*string)(nil),
+		VersionIdMarker: (*string)(nil),
+	}, mock.Anything).Return((*s3.ListObjectVersionsOutput)(nil), assert.AnError)
 
 	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2")
 
@@ -77,8 +110,8 @@ func TestS3UsageInfo_FailedBucket(t *testing.T) {
 
 func TestS3UsageInfo_AllBucketsFail(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
-		Return((*s3.ListObjectsV2Output)(nil), assert.AnError)
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).
+		Return((*s3.ListObjectVersionsOutput)(nil), assert.AnError)
 
 	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2,bucket3")
 
@@ -91,10 +124,10 @@ func TestS3UsageInfo_AllBucketsFail(t *testing.T) {
 
 func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(1024)},
-			{Size: aws.Int64(2048)},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), IsLatest: aws.Bool(true)},
+			{Size: aws.Int64(2048), IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -103,16 +136,16 @@ func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-	assert.Equal(t, float64(6144), summary.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(4), summary.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, float64(6144), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(4), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
 	assert.Len(t, summary.S3Buckets, 2)
 }
 
 func TestS3UsageInfo_TrailingSpaceInBucketNames(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(1024)},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -135,10 +168,10 @@ func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 			{Name: aws.String("bucket3")},
 		},
 	}, nil)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(1024)},
-			{Size: aws.Int64(2048)},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), IsLatest: aws.Bool(true)},
+			{Size: aws.Int64(2048), IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -147,37 +180,82 @@ func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-	assert.Equal(t, float64(9216), summary.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(6), summary.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, float64(9216), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(6), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
 	assert.Len(t, summary.S3Buckets, 3)
 }
 
 func TestCalculateBucketMetrics(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(1024), StorageClass: "STANDARD"},
-			{Size: aws.Int64(2048), StorageClass: "STANDARD"},
-			{Size: aws.Int64(4096), StorageClass: "GLACIER"},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+			{Size: aws.Int64(2048), StorageClass: "STANDARD", IsLatest: aws.Bool(false)},
+			{Size: aws.Int64(4096), StorageClass: "GLACIER", IsLatest: aws.Bool(true)},
+		},
+		DeleteMarkers: []types.DeleteMarkerEntry{
+			{IsLatest: aws.Bool(true), Key: aws.String("deleted.txt")},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	storageClasses, duration, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient)
+	storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient)
 
 	assert.NoError(t, err)
-	assert.Equal(t, float64(3072), storageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(2), storageClasses["STANDARD"].ObjectNumber)
-	assert.Equal(t, float64(4096), storageClasses["GLACIER"].Size)
-	assert.Equal(t, float64(1), storageClasses["GLACIER"].ObjectNumber)
+	assert.Equal(t, float64(1024), storageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(1), storageClasses["STANDARD"].CurrentObjectNumber)
+	assert.Equal(t, float64(2048), storageClasses["STANDARD"].NoncurrentSize)
+	assert.Equal(t, float64(1), storageClasses["STANDARD"].NoncurrentObjectNumber)
+	assert.Equal(t, float64(4096), storageClasses["GLACIER"].CurrentSize)
+	assert.Equal(t, float64(1), storageClasses["GLACIER"].CurrentObjectNumber)
+	assert.Equal(t, float64(0), storageClasses["GLACIER"].NoncurrentSize)
+	assert.Equal(t, float64(1), deleteMarkers)
 	assert.Greater(t, duration, time.Duration(0))
+}
+
+func TestCalculateBucketMetrics_Pagination(t *testing.T) {
+	mockClient := new(MockS3Client)
+
+	nextKey := "key2"
+	nextVersionID := "v2"
+
+	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
+		Bucket:          aws.String("bucket1"),
+		KeyMarker:       (*string)(nil),
+		VersionIdMarker: (*string)(nil),
+	}, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(1024), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+		},
+		IsTruncated:         aws.Bool(true),
+		NextKeyMarker:       &nextKey,
+		NextVersionIdMarker: &nextVersionID,
+	}, nil)
+
+	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
+		Bucket:          aws.String("bucket1"),
+		KeyMarker:       &nextKey,
+		VersionIdMarker: &nextVersionID,
+	}, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(2048), StorageClass: "STANDARD", IsLatest: aws.Bool(true)},
+		},
+		IsTruncated: aws.Bool(false),
+	}, nil)
+
+	storageClasses, deleteMarkers, _, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient)
+
+	assert.NoError(t, err)
+	assert.Equal(t, float64(3072), storageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(2), storageClasses["STANDARD"].CurrentObjectNumber)
+	assert.Equal(t, float64(0), deleteMarkers)
 }
 
 func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(100)},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(100), IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -186,16 +264,16 @@ func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
 	assert.Len(t, summary.S3Buckets, 1)
 }
 
 func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
 	mockClient := new(MockS3Client)
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectsV2Output{
-		Contents: []types.Object{
-			{Size: aws.Int64(100)},
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{
+		Versions: []types.ObjectVersion{
+			{Size: aws.Int64(100), IsLatest: aws.Bool(true)},
 		},
 		IsTruncated: aws.Bool(false),
 	}, nil)
@@ -204,8 +282,8 @@ func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
-	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, float64(100), summary.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(1), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
 	assert.Len(t, summary.S3Buckets, 1)
 }
 
@@ -251,12 +329,12 @@ func TestContextPropagationThroughChain(t *testing.T) {
 	mockClient := new(MockS3Client)
 
 	var capturedCtx context.Context
-	mockClient.On("ListObjectsV2", mock.Anything, mock.Anything, mock.Anything).
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			capturedCtx = args.Get(0).(context.Context)
 		}).
-		Return(&s3.ListObjectsV2Output{
-			Contents:    []types.Object{},
+		Return(&s3.ListObjectVersionsOutput{
+			Versions:    []types.ObjectVersion{},
 			IsTruncated: aws.Bool(false),
 		}, nil)
 

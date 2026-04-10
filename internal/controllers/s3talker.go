@@ -14,7 +14,7 @@ import (
 
 type S3ClientInterface interface {
 	ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
-	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	ListObjectVersions(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error)
 }
 
 // distinct removes duplicates and blank entries from a slice of strings
@@ -72,10 +72,13 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 		defer mu.Unlock()
 
 		summary.S3Buckets = append(summary.S3Buckets, bucket)
+		summary.DeleteMarkers += bucket.DeleteMarkers
 		for storageClass, metrics := range bucket.StorageClasses {
 			summaryMetrics := summary.StorageClasses[storageClass]
-			summaryMetrics.Size += metrics.Size
-			summaryMetrics.ObjectNumber += metrics.ObjectNumber
+			summaryMetrics.CurrentSize += metrics.CurrentSize
+			summaryMetrics.CurrentObjectNumber += metrics.CurrentObjectNumber
+			summaryMetrics.NoncurrentSize += metrics.NoncurrentSize
+			summaryMetrics.NoncurrentObjectNumber += metrics.NoncurrentObjectNumber
 			summary.StorageClasses[storageClass] = summaryMetrics
 		}
 		log.Debugf("Bucket size and objects count: %v", bucket)
@@ -86,7 +89,7 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 		go func(bucketName string) {
 			defer wg.Done()
 
-			storageClasses, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
+			storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, err)
@@ -97,6 +100,7 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 			processBucketResult(Bucket{
 				BucketName:     bucketName,
 				StorageClasses: storageClasses,
+				DeleteMarkers:  deleteMarkers,
 				ListDuration:   duration,
 			})
 			log.Debugf("Finish bucket %s processing", bucketName)
@@ -116,40 +120,56 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	return summary, nil
 }
 
-// calculateBucketMetrics computes the total size and object count for a bucket
-func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface) (map[string]StorageClassMetrics, time.Duration, error) {
-	var continuationToken *string
+// calculateBucketMetrics computes the total size, object count, and delete markers for a bucket
+func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface) (map[string]StorageClassMetrics, float64, time.Duration, error) {
 	storageClasses := make(map[string]StorageClassMetrics)
+	var deleteMarkers float64
+	var keyMarker *string
+	var versionIDMarker *string
 
 	start := time.Now()
 
 	for {
-		page, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(bucketName),
-			ContinuationToken: continuationToken,
+		page, err := s3Client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
+			Bucket:          aws.String(bucketName),
+			KeyMarker:       keyMarker,
+			VersionIdMarker: versionIDMarker,
 		})
 		if err != nil {
-			log.Errorf("Failed to list objects for bucket %s: %v", bucketName, err)
-			return nil, 0, err
+			log.Errorf("Failed to list object versions for bucket %s: %v", bucketName, err)
+			return nil, 0, 0, err
 		}
 
-		for _, obj := range page.Contents {
-			storageClass := string(obj.StorageClass)
+		for _, ver := range page.Versions {
+			storageClass := string(ver.StorageClass)
 			if storageClass == "" {
 				storageClass = "STANDARD"
 			}
 
+			var size int64
+			if ver.Size != nil {
+				size = *ver.Size
+			}
+
 			metrics := storageClasses[storageClass]
-			metrics.Size += float64(*obj.Size)
-			metrics.ObjectNumber++
+			if ver.IsLatest != nil && *ver.IsLatest {
+				metrics.CurrentSize += float64(size)
+				metrics.CurrentObjectNumber++
+			} else {
+				metrics.NoncurrentSize += float64(size)
+				metrics.NoncurrentObjectNumber++
+			}
 			storageClasses[storageClass] = metrics
 		}
 
-		if page.IsTruncated != nil && !*page.IsTruncated {
+		deleteMarkers += float64(len(page.DeleteMarkers))
+
+		if page.IsTruncated == nil || !*page.IsTruncated {
 			break
 		}
-		continuationToken = page.NextContinuationToken
+		keyMarker = page.NextKeyMarker
+		versionIDMarker = page.NextVersionIdMarker
 	}
 
-	return storageClasses, time.Since(start), nil
+	return storageClasses, deleteMarkers, time.Since(start), nil
 }

@@ -23,14 +23,16 @@ func TestS3Collector(t *testing.T) {
 		EndpointStatus:    true,
 		FailedBucketCount: 0,
 		StorageClasses: map[string]StorageClassMetrics{
-			"STANDARD": {Size: 1024.0, ObjectNumber: 1.0},
+			"STANDARD": {CurrentSize: 1024.0, CurrentObjectNumber: 1.0, NoncurrentSize: 512.0, NoncurrentObjectNumber: 2.0},
 		},
+		DeleteMarkers:     3.0,
 		BucketCount:       1,
 		TotalListDuration: 2 * time.Second,
 		S3Buckets: []Bucket{
 			{
 				BucketName:     "test-bucket",
-				StorageClasses: map[string]StorageClassMetrics{"STANDARD": {Size: 1024.0, ObjectNumber: 1.0}},
+				StorageClasses: map[string]StorageClassMetrics{"STANDARD": {CurrentSize: 1024.0, CurrentObjectNumber: 1.0, NoncurrentSize: 512.0, NoncurrentObjectNumber: 2.0}},
+				DeleteMarkers:  3.0,
 				ListDuration:   1 * time.Second,
 			},
 		},
@@ -49,12 +51,18 @@ func TestS3Collector(t *testing.T) {
 			value  float64
 		}{
 			{"s3_endpoint_up", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 1.0},
-			{"s3_total_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1024.0},
-			{"s3_total_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD"}, 1.0},
+			{"s3_total_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD", "versionStatus": "current"}, 1024.0},
+			{"s3_total_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD", "versionStatus": "noncurrent"}, 512.0},
+			{"s3_total_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD", "versionStatus": "current"}, 1.0},
+			{"s3_total_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "storageClass": "STANDARD", "versionStatus": "noncurrent"}, 2.0},
+			{"s3_total_delete_markers", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 3.0},
 			{"s3_bucket_count", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 1.0},
 			{"s3_failed_bucket_count", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region}, 0.0},
-			{"s3_bucket_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1024.0},
-			{"s3_bucket_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD"}, 1.0},
+			{"s3_bucket_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD", "versionStatus": "current"}, 1024.0},
+			{"s3_bucket_size", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD", "versionStatus": "noncurrent"}, 512.0},
+			{"s3_bucket_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD", "versionStatus": "current"}, 1.0},
+			{"s3_bucket_object_number", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket", "storageClass": "STANDARD", "versionStatus": "noncurrent"}, 2.0},
+			{"s3_bucket_delete_markers", map[string]string{"s3Endpoint": s3Endpoint, "s3Region": s3Region, "bucketName": "test-bucket"}, 3.0},
 		}
 
 		expectedDuration := []struct {
@@ -145,13 +153,14 @@ func TestGetMetrics(t *testing.T) {
 		EndpointStatus:    true,
 		FailedBucketCount: 0,
 		StorageClasses: map[string]StorageClassMetrics{
-			"STANDARD": {Size: 2048.0, ObjectNumber: 5.0},
+			"STANDARD": {CurrentSize: 2048.0, CurrentObjectNumber: 5.0},
 		},
+		DeleteMarkers:     1.0,
 		BucketCount:       2,
 		TotalListDuration: 3 * time.Second,
 		S3Buckets: []Bucket{
-			{BucketName: "test-bucket-1", StorageClasses: map[string]StorageClassMetrics{"STANDARD": {Size: 1024.0, ObjectNumber: 3.0}}, ListDuration: 1 * time.Second},
-			{BucketName: "test-bucket-2", StorageClasses: map[string]StorageClassMetrics{"STANDARD": {Size: 1024.0, ObjectNumber: 2.0}}, ListDuration: 2 * time.Second},
+			{BucketName: "test-bucket-1", StorageClasses: map[string]StorageClassMetrics{"STANDARD": {CurrentSize: 1024.0, CurrentObjectNumber: 3.0}}, DeleteMarkers: 1.0, ListDuration: 1 * time.Second},
+			{BucketName: "test-bucket-2", StorageClasses: map[string]StorageClassMetrics{"STANDARD": {CurrentSize: 1024.0, CurrentObjectNumber: 2.0}}, ListDuration: 2 * time.Second},
 		},
 	}
 
@@ -164,8 +173,9 @@ func TestGetMetrics(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, m.EndpointStatus)
 	assert.Equal(t, 2, m.BucketCount)
-	assert.Equal(t, 2048.0, m.StorageClasses["STANDARD"].Size)
-	assert.Equal(t, 5.0, m.StorageClasses["STANDARD"].ObjectNumber)
+	assert.Equal(t, 2048.0, m.StorageClasses["STANDARD"].CurrentSize)
+	assert.Equal(t, 5.0, m.StorageClasses["STANDARD"].CurrentObjectNumber)
+	assert.Equal(t, 1.0, m.DeleteMarkers)
 	assert.Len(t, m.S3Buckets, 2)
 	assert.Equal(t, "test-bucket-1", m.S3Buckets[0].BucketName)
 	assert.Equal(t, "test-bucket-2", m.S3Buckets[1].BucketName)
