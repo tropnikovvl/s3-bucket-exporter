@@ -19,14 +19,16 @@ Endpoint-level metrics:
   - `s3_endpoint_up` — 1 if all buckets were listed successfully, 0 otherwise
   - `s3_bucket_count` — total number of monitored buckets
   - `s3_failed_bucket_count` — number of buckets that failed to list
-  - `s3_total_size` — total size across all buckets, by storage class
-  - `s3_total_object_number` — total object count across all buckets, by storage class
+  - `s3_total_size{versionStatus="current|noncurrent"}` — total size across all buckets, by storage class and version status
+  - `s3_total_object_number{versionStatus="current|noncurrent"}` — total object count across all buckets, by storage class and version status
+  - `s3_total_delete_markers` — total delete marker count across all buckets
   - `s3_list_total_duration_seconds` — total time spent listing all buckets
   - `s3_auth_attempts_total` — authentication attempts by method and status
 
 Bucket-level metrics:
-  - `s3_bucket_size` — size per bucket and storage class
-  - `s3_bucket_object_number` — object count per bucket and storage class
+  - `s3_bucket_size{versionStatus="current|noncurrent"}` — size per bucket, storage class, and version status
+  - `s3_bucket_object_number{versionStatus="current|noncurrent"}` — object count per bucket, storage class, and version status
+  - `s3_bucket_delete_markers` — delete marker count per bucket
   - `s3_list_duration_seconds` — time spent listing objects in a bucket
 
 ## Getting Started
