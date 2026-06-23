@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -115,24 +116,26 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "valid configuration",
 			cfg: Config{
-				ScrapeInterval: "5m",
-				S3Endpoint:     "https://s3.amazonaws.com",
-				S3Region:       "us-east-1",
-				ListenPort:     ":9655",
-				LogLevel:       "info",
-				LogFormat:      "text",
+				ScrapeInterval:   "5m",
+				S3Endpoint:       "https://s3.amazonaws.com",
+				S3Region:         "us-east-1",
+				ListenPort:       ":9655",
+				LogLevel:         "info",
+				LogFormat:        "text",
+				S3MaxConcurrency: 25,
 			},
 			expectError: false,
 		},
 		{
 			name: "valid configuration with empty endpoint",
 			cfg: Config{
-				ScrapeInterval: "1h",
-				S3Endpoint:     "",
-				S3Region:       "eu-west-1",
-				ListenPort:     ":8080",
-				LogLevel:       "debug",
-				LogFormat:      "json",
+				ScrapeInterval:   "1h",
+				S3Endpoint:       "",
+				S3Region:         "eu-west-1",
+				ListenPort:       ":8080",
+				LogLevel:         "debug",
+				LogFormat:        "json",
+				S3MaxConcurrency: 10,
 			},
 			expectError: false,
 		},
@@ -256,6 +259,56 @@ func TestValidateConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidate_PopulatesScrapeIntervalDuration(t *testing.T) {
+	cfg := Config{
+		ScrapeInterval:   "10m",
+		S3Region:         "us-east-1",
+		ListenPort:       ":9655",
+		LogLevel:         "info",
+		LogFormat:        "text",
+		S3MaxConcurrency: 25,
+	}
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, 10*time.Minute, cfg.ScrapeIntervalDuration)
+}
+
+func TestInitFlags_MaxConcurrencyDefault(t *testing.T) {
+	oldCommandLine := flag.CommandLine
+	defer func() { flag.CommandLine = oldCommandLine }()
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+
+	_ = os.Unsetenv("S3_MAX_CONCURRENCY")
+	cfg := InitFlags()
+	require.NoError(t, flag.CommandLine.Parse([]string{}))
+
+	assert.Equal(t, 25, cfg.S3MaxConcurrency)
+}
+
+func TestValidate_MaxConcurrency(t *testing.T) {
+	validate := func(n int) error {
+		cfg := Config{
+			ScrapeInterval:   "5m",
+			S3Region:         "us-east-1",
+			ListenPort:       ":9655",
+			LogLevel:         "info",
+			LogFormat:        "text",
+			S3MaxConcurrency: n,
+		}
+		return cfg.Validate()
+	}
+
+	assert.NoError(t, validate(1))
+	assert.NoError(t, validate(25))
+
+	err := validate(0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max concurrency")
+
+	err = validate(-3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max concurrency")
 }
 
 func TestInitFlags(t *testing.T) {

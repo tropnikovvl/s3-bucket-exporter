@@ -34,11 +34,12 @@ type S3Summary struct {
 }
 
 type S3Collector struct {
-	metrics      S3Summary
-	metricsMutex sync.RWMutex
-	err          error
-	s3Endpoint   string
-	s3Region     string
+	metrics        S3Summary
+	metricsMutex   sync.RWMutex
+	err            error
+	s3Endpoint     string
+	s3Region       string
+	maxConcurrency int
 }
 
 var metricsDesc = map[string]*prometheus.Desc{
@@ -56,10 +57,11 @@ var metricsDesc = map[string]*prometheus.Desc{
 }
 
 // NewS3Collector creates a new S3Collector
-func NewS3Collector(s3Endpoint, s3Region string) *S3Collector {
+func NewS3Collector(s3Endpoint, s3Region string, maxConcurrency int) *S3Collector {
 	return &S3Collector{
-		s3Endpoint: s3Endpoint,
-		s3Region:   s3Region,
+		s3Endpoint:     s3Endpoint,
+		s3Region:       s3Region,
+		maxConcurrency: maxConcurrency,
 	}
 }
 
@@ -122,7 +124,7 @@ func emitStorageClassMetrics(ch chan<- prometheus.Metric, sizeDesc, objectsDesc 
 
 // UpdateMetrics updates the cached metrics
 func (c *S3Collector) UpdateMetrics(ctx context.Context, client S3ClientInterface, s3BucketNames string) {
-	metrics, err := S3UsageInfo(ctx, c.s3Region, client, s3BucketNames)
+	metrics, err := S3UsageInfo(ctx, c.s3Region, client, s3BucketNames, c.maxConcurrency)
 
 	c.metricsMutex.Lock()
 	c.metrics = metrics

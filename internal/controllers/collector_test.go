@@ -17,7 +17,7 @@ func TestS3Collector(t *testing.T) {
 	s3Endpoint := "http://localhost"
 	s3Region := "us-east-1"
 
-	collector := NewS3Collector(s3Endpoint, s3Region)
+	collector := NewS3Collector(s3Endpoint, s3Region, 25)
 	collector.metricsMutex.Lock()
 	collector.metrics = S3Summary{
 		EndpointStatus:    true,
@@ -142,7 +142,7 @@ func matchMetricDuration(exp struct {
 }
 
 func TestGetMetrics(t *testing.T) {
-	collector := NewS3Collector("http://localhost", "us-east-1")
+	collector := NewS3Collector("http://localhost", "us-east-1", 25)
 
 	m, err := collector.GetMetrics()
 	assert.NoError(t, err)
@@ -191,7 +191,7 @@ func TestGetMetrics(t *testing.T) {
 }
 
 func TestGetMetricsConcurrentAccess(t *testing.T) {
-	collector := NewS3Collector("http://localhost", "us-east-1")
+	collector := NewS3Collector("http://localhost", "us-east-1", 25)
 
 	var wg sync.WaitGroup
 

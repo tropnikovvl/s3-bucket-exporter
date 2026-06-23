@@ -83,7 +83,7 @@ func TestUpdateMetrics(t *testing.T) {
 	cfg := testConfig()
 	cfg.S3BucketNames = "test-bucket"
 
-	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region, 25)
 	interval := 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,7 +138,7 @@ func TestUpdateMetricsContextCancellation(t *testing.T) {
 	cfg := testConfig()
 	cfg.S3BucketNames = "test-bucket"
 
-	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region, 25)
 	interval := 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,7 +187,7 @@ func TestUpdateMetricsImmediateCollection(t *testing.T) {
 
 	cfg := testConfig()
 
-	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region, 25)
 	interval := 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -237,7 +237,7 @@ func TestUpdateMetricsContextTimeout(t *testing.T) {
 
 	cfg := testConfig()
 
-	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region, 25)
 	interval := 50 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())

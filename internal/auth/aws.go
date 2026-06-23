@@ -79,25 +79,30 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		return aws.Config{}, err
 	}
 
+	// Resolve credentials eagerly so the cache expiry reflects their real
+	// lifetime. Only populate the cache once retrieval succeeds, otherwise a
+	// transient failure would poison the cache (a non-nil config with a zero
+	// expiry reads as "valid forever" and the loader would never retry).
+	creds, err := newConfig.Credentials.Retrieve(ctx)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("failed to retrieve credentials: %w", err)
+	}
+
 	c.cachedConfig = &newConfig
-	c.expiresAt = c.calculateExpiry()
+	c.expiresAt = c.calculateExpiry(creds)
 
 	log.Debugf("AWS configuration cached until %v", c.expiresAt)
 	return newConfig, nil
 }
 
-// calculateExpiry determines when the cached config should expire
-func (c *CachedAWSAuth) calculateExpiry() time.Time {
-	switch c.cfg.Method {
-	case AuthMethodKeys:
-		// Static credentials never expire
+// calculateExpiry returns the cached config's expiry derived from the
+// credentials themselves. Non-expiring credentials (static keys) yield the
+// zero time, meaning "never expires".
+func (c *CachedAWSAuth) calculateExpiry(creds aws.Credentials) time.Time {
+	if !creds.CanExpire {
 		return time.Time{}
-	case AuthMethodRole, AuthMethodWebID:
-		// STS credentials typically expire in 1 hour, but we'll be conservative
-		return time.Now().Add(45 * time.Minute)
-	default:
-		return time.Now().Add(30 * time.Minute)
 	}
+	return creds.Expires
 }
 
 func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
@@ -131,8 +136,12 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 	}
 
 	if a.cfg.SkipTLSVerify {
-		customTransport := http.DefaultTransport.(*http.Transport).Clone()
-		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		baseTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			baseTransport = &http.Transport{}
+		}
+		customTransport := baseTransport.Clone()
+		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in via S3_SKIP_TLS_VERIFY
 		options = append(options, config.WithHTTPClient(&http.Client{
 			Transport: customTransport,
 		}))

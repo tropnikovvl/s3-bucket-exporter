@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
 	"os"
@@ -76,14 +77,11 @@ func main() {
 
 	cfg.SetupLogger()
 
-	interval, err := time.ParseDuration(cfg.ScrapeInterval)
-	if err != nil {
-		log.Fatalf("Invalid scrape interval: %s", cfg.ScrapeInterval)
-	}
+	interval := cfg.ScrapeIntervalDuration
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region)
+	collector := controllers.NewS3Collector(cfg.S3Endpoint, cfg.S3Region, cfg.S3MaxConcurrency)
 	go updateMetrics(ctx, collector, cfg, interval, func(awsCfg aws.Config) controllers.S3ClientInterface {
 		return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.UsePathStyle = cfg.S3ForcePathStyle
@@ -113,7 +111,7 @@ func main() {
 	}
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Server failed to start: %v", err)
 		}
 	}()

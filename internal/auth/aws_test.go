@@ -2,12 +2,14 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +57,18 @@ func TestGetAWSConfigValidation(t *testing.T) {
 	}
 }
 
+func TestGetConfig_SkipTLSVerify(t *testing.T) {
+	a := NewAWSAuth(AuthConfig{
+		Region:        "us-east-1",
+		Method:        AuthMethodKeys,
+		AccessKey:     "k",
+		SecretKey:     "s",
+		SkipTLSVerify: true,
+	})
+	_, err := a.GetConfig(context.Background())
+	assert.NoError(t, err)
+}
+
 // Mock config loader for testing
 type mockConfigLoader struct {
 	loadFunc  func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error)
@@ -91,68 +105,27 @@ func TestNewCachedAWSAuth(t *testing.T) {
 }
 
 func TestCachedAWSAuth_CalculateExpiry(t *testing.T) {
-	tests := []struct {
-		name          string
-		method        string
-		expectedDelta time.Duration
-		neverExpires  bool
-	}{
-		{
-			name:         "Keys method - never expires",
-			method:       AuthMethodKeys,
-			neverExpires: true,
-		},
-		{
-			name:          "Role method - 45 minutes",
-			method:        AuthMethodRole,
-			expectedDelta: 45 * time.Minute,
-		},
-		{
-			name:          "WebID method - 45 minutes",
-			method:        AuthMethodWebID,
-			expectedDelta: 45 * time.Minute,
-		},
-		{
-			name:          "IAM method - 30 minutes",
-			method:        AuthMethodIAM,
-			expectedDelta: 30 * time.Minute,
-		},
-		{
-			name:          "Unknown method - 30 minutes (default)",
-			method:        "unknown",
-			expectedDelta: 30 * time.Minute,
-		},
-	}
+	c := &CachedAWSAuth{}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cachedAuth := &CachedAWSAuth{
-				AWSAuth: AWSAuth{
-					cfg: AuthConfig{
-						Method: tt.method,
-					},
-				},
-			}
+	// Non-expiring credentials (static keys) → zero time.
+	assert.True(t, c.calculateExpiry(aws.Credentials{CanExpire: false}).IsZero())
 
-			expiry := cachedAuth.calculateExpiry()
-
-			if tt.neverExpires {
-				assert.True(t, expiry.IsZero(), "Keys method should return zero time (never expires)")
-				return
-			}
-
-			before := time.Now().Add(-time.Second)
-			after := time.Now().Add(tt.expectedDelta).Add(time.Second)
-			assert.True(t, expiry.After(before.Add(tt.expectedDelta)))
-			assert.True(t, expiry.Before(after))
-		})
-	}
+	// Expiring credentials → exactly the credentials' Expires.
+	exp := time.Now().Add(42 * time.Minute).Round(time.Second)
+	got := c.calculateExpiry(aws.Credentials{CanExpire: true, Expires: exp})
+	assert.Equal(t, exp, got)
 }
 
 func TestCachedAWSAuth_GetConfig_FirstCall(t *testing.T) {
+	exp := time.Now().Add(45 * time.Minute).Round(time.Second)
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
-			return aws.Config{Region: "us-east-1"}, nil
+			return aws.Config{
+				Region: "us-east-1",
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{AccessKeyID: "k", SecretAccessKey: "s", CanExpire: true, Expires: exp}, nil
+				}),
+			}, nil
 		},
 	}
 
@@ -167,14 +140,49 @@ func TestCachedAWSAuth_GetConfig_FirstCall(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "us-east-1", cfg.Region)
 	assert.NotNil(t, cachedAuth.cachedConfig)
-	assert.False(t, cachedAuth.expiresAt.IsZero())
+	// Expiry is derived from the credentials' real Expires.
+	assert.Equal(t, exp, cachedAuth.expiresAt)
 	assert.Equal(t, 1, mockLoader.getCallCount())
+}
+
+func TestCachedAWSAuth_GetConfig_RetrieveFailureNotCached(t *testing.T) {
+	fail := true
+	mockLoader := &mockConfigLoader{
+		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
+			return aws.Config{
+				Region: "us-east-1",
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					if fail {
+						return aws.Credentials{}, errors.New("sts temporarily unavailable")
+					}
+					return aws.Credentials{AccessKeyID: "k", SecretAccessKey: "s"}, nil
+				}),
+			}, nil
+		},
+	}
+
+	cachedAuth := NewCachedAWSAuth(AuthConfig{Region: "us-east-1", Method: AuthMethodIAM})
+	cachedAuth.loader = mockLoader.Load
+
+	// First call: credential retrieval fails — the cache must NOT be populated.
+	_, err := cachedAuth.GetConfig(context.Background())
+	require.Error(t, err)
+	assert.Nil(t, cachedAuth.cachedConfig, "a failed Retrieve must not poison the cache")
+
+	// Second call: retrieval works — loader must be invoked again (cache wasn't poisoned).
+	fail = false
+	_, err = cachedAuth.GetConfig(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, mockLoader.getCallCount(), "must retry the loader after a failed retrieve")
 }
 
 func TestCachedAWSAuth_GetConfig_UsesCache(t *testing.T) {
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
-			return aws.Config{Region: "us-east-1"}, nil
+			return aws.Config{
+				Region:      "us-east-1",
+				Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("k", "s", "")),
+			}, nil
 		},
 	}
 
@@ -198,7 +206,10 @@ func TestCachedAWSAuth_GetConfig_UsesCache(t *testing.T) {
 func TestCachedAWSAuth_GetConfig_RefreshesWhenExpired(t *testing.T) {
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
-			return aws.Config{Region: "us-east-1"}, nil
+			return aws.Config{
+				Region:      "us-east-1",
+				Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("k", "s", "")),
+			}, nil
 		},
 	}
 
@@ -234,7 +245,10 @@ func TestCachedAWSAuth_GetConfig_ConcurrentAccess(t *testing.T) {
 			mu.Lock()
 			callCount++
 			mu.Unlock()
-			return aws.Config{Region: "us-east-1"}, nil
+			return aws.Config{
+				Region:      "us-east-1",
+				Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("k", "s", "")),
+			}, nil
 		},
 	}
 
@@ -281,7 +295,10 @@ func TestCachedAWSAuth_GetConfig_DoubleCheckLocking(t *testing.T) {
 	mockLoader := &mockConfigLoader{
 		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
 			time.Sleep(50 * time.Millisecond)
-			return aws.Config{Region: "us-east-1"}, nil
+			return aws.Config{
+				Region:      "us-east-1",
+				Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("k", "s", "")),
+			}, nil
 		},
 	}
 
