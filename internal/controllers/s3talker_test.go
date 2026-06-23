@@ -2,6 +2,9 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,7 +42,7 @@ func TestS3UsageInfo_SingleBucket(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -66,7 +69,7 @@ func TestS3UsageInfo_VersionedBucket(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -98,7 +101,7 @@ func TestS3UsageInfo_FailedBucket(t *testing.T) {
 		VersionIdMarker: (*string)(nil),
 	}, mock.Anything).Return((*s3.ListObjectVersionsOutput)(nil), assert.AnError)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2", 25)
 
 	assert.NoError(t, err)
 	assert.False(t, summary.EndpointStatus, "EndpointStatus should be false when any bucket fails")
@@ -113,7 +116,7 @@ func TestS3UsageInfo_AllBucketsFail(t *testing.T) {
 	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).
 		Return((*s3.ListObjectVersionsOutput)(nil), assert.AnError)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2,bucket3")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2,bucket3", 25)
 
 	assert.NoError(t, err)
 	assert.False(t, summary.EndpointStatus)
@@ -132,7 +135,7 @@ func TestS3UsageInfo_MultipleBuckets(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1,bucket2", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -150,7 +153,7 @@ func TestS3UsageInfo_TrailingSpaceInBucketNames(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1, bucket2 ")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "bucket1, bucket2 ", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -176,13 +179,47 @@ func TestS3UsageInfo_EmptyBucketList(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "")
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, "", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
 	assert.Equal(t, float64(9216), summary.StorageClasses["STANDARD"].CurrentSize)
 	assert.Equal(t, float64(6), summary.StorageClasses["STANDARD"].CurrentObjectNumber)
 	assert.Len(t, summary.S3Buckets, 3)
+}
+
+func TestS3UsageInfo_ConcurrencyIsBounded(t *testing.T) {
+	var inFlight, maxObserved int32
+	mockClient := new(MockS3Client)
+	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			cur := atomic.AddInt32(&inFlight, 1)
+			for {
+				old := atomic.LoadInt32(&maxObserved)
+				if cur <= old || atomic.CompareAndSwapInt32(&maxObserved, old, cur) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			atomic.AddInt32(&inFlight, -1)
+		}).
+		Return(&s3.ListObjectVersionsOutput{
+			Versions:    []types.ObjectVersion{{Size: aws.Int64(1), IsLatest: aws.Bool(true)}},
+			IsTruncated: aws.Bool(false),
+		}, nil)
+
+	names := make([]string, 50)
+	for i := range names {
+		names[i] = fmt.Sprintf("bucket%d", i)
+	}
+
+	const limit = 5
+	summary, err := S3UsageInfo(context.Background(), "us-west-2", mockClient, strings.Join(names, ","), limit)
+
+	require.NoError(t, err)
+	assert.Len(t, summary.S3Buckets, 50)
+	assert.LessOrEqual(t, int(atomic.LoadInt32(&maxObserved)), limit,
+		"in-flight ListObjectVersions calls must not exceed the configured limit")
 }
 
 func TestCalculateBucketMetrics(t *testing.T) {
@@ -260,7 +297,7 @@ func TestS3UsageInfo_WithIAMRole(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -278,7 +315,7 @@ func TestS3UsageInfo_WithAccessKeys(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1")
+	summary, err := S3UsageInfo(context.Background(), "us-east-1", mockClient, "bucket1", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)
@@ -295,7 +332,7 @@ func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "")
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "", 25)
 
 	if err != nil {
 		assert.Contains(t, err.Error(), "unable to connect")
@@ -314,7 +351,7 @@ func TestContextTimeout(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "")
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "", 25)
 
 	assert.Error(t, err)
 	assert.False(t, summary.EndpointStatus)
@@ -340,7 +377,7 @@ func TestContextPropagationThroughChain(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), testContextKey, "test-value")
 
-	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "test-bucket")
+	summary, err := S3UsageInfo(ctx, "us-west-2", mockClient, "test-bucket", 25)
 
 	assert.NoError(t, err)
 	assert.True(t, summary.EndpointStatus)

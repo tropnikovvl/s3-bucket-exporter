@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 )
 
 type S3ClientInterface interface {
@@ -36,7 +36,7 @@ func distinct(input []string) []string {
 }
 
 // S3UsageInfo gets S3 usage information and returns S3Summary
-func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterface, s3BucketNames string) (S3Summary, error) {
+func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterface, s3BucketNames string, maxConcurrency int) (S3Summary, error) {
 	summary := S3Summary{
 		StorageClasses: make(map[string]StorageClassMetrics),
 	}
@@ -61,16 +61,40 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	log.Debugf("List of buckets in %s region: %v", s3Region, bucketNames)
 	summary.S3Buckets = make([]Bucket, 0, len(bucketNames))
 
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
-	)
+	type bucketResult struct {
+		bucket Bucket
+		err    error
+	}
+	results := make([]bucketResult, len(bucketNames))
 
-	processBucketResult := func(bucket Bucket) {
-		mu.Lock()
-		defer mu.Unlock()
+	g := new(errgroup.Group)
+	g.SetLimit(maxConcurrency)
+	for i, bucketName := range bucketNames {
+		g.Go(func() error {
+			storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
+			if err != nil {
+				results[i] = bucketResult{err: err}
+				return nil // collect failures; never cancel sibling buckets
+			}
+			results[i] = bucketResult{bucket: Bucket{
+				BucketName:     bucketName,
+				StorageClasses: storageClasses,
+				DeleteMarkers:  deleteMarkers,
+				ListDuration:   duration,
+			}}
+			log.Debugf("Finish bucket %s processing", bucketName)
+			return nil
+		})
+	}
+	_ = g.Wait() // errors are aggregated via results, not returned
 
+	var errs []error
+	for _, r := range results {
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		bucket := r.bucket
 		summary.S3Buckets = append(summary.S3Buckets, bucket)
 		summary.DeleteMarkers += bucket.DeleteMarkers
 		for storageClass, metrics := range bucket.StorageClasses {
@@ -84,34 +108,9 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 		log.Debugf("Bucket size and objects count: %v", bucket)
 	}
 
-	for _, bucketName := range bucketNames {
-		wg.Add(1)
-		go func(bucketName string) {
-			defer wg.Done()
-
-			storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-				return
-			}
-
-			processBucketResult(Bucket{
-				BucketName:     bucketName,
-				StorageClasses: storageClasses,
-				DeleteMarkers:  deleteMarkers,
-				ListDuration:   duration,
-			})
-			log.Debugf("Finish bucket %s processing", bucketName)
-		}(bucketName)
-	}
-
-	wg.Wait()
-
 	summary.FailedBucketCount = len(errs)
 	if len(errs) > 0 {
-		log.Errorf("Encountered errors while processing buckets: %v", errs)
+		log.Errorf("Encountered errors while processing %d of %d buckets", len(errs), len(bucketNames))
 	}
 
 	summary.EndpointStatus = len(errs) == 0 && len(summary.S3Buckets) > 0
@@ -136,7 +135,11 @@ func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3C
 			VersionIdMarker: versionIDMarker,
 		})
 		if err != nil {
-			log.Errorf("Failed to list object versions for bucket %s: %v", bucketName, err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				log.Warnf("Listing aborted for bucket %s: scrape deadline exceeded", bucketName)
+			} else {
+				log.Errorf("Failed to list object versions for bucket %s: %v", bucketName, err)
+			}
 			return nil, 0, 0, err
 		}
 

@@ -98,21 +98,22 @@ The exporter supports both command-line arguments and environment variables (arg
 | LOG_LEVEL | -log_level | Logging level | info | debug |
 | LOG_FORMAT | -log_format | Log format | text | json |
 | SCRAPE_INTERVAL | -scrape_interval | Metrics update interval | 5m | 30s |
+| S3_MAX_CONCURRENCY | -s3_max_concurrency | Maximum number of buckets listed in parallel | 25 | 50 |
 
 > Warning: For security reasons, avoid passing credentials via command line arguments
 
 ## Authentication
 
-The exporter automatically detects the authentication method based on the provided configuration. Credentials are cached and refreshed proactively before expiry.
+The exporter automatically detects the authentication method based on the provided configuration. Credentials are cached and refreshed proactively before their actual expiry (the cache TTL is derived from the credentials' actual expiry).
 
 ### Supported Authentication Methods
 
 | Method | When used | Cache TTL |
 |--------|-----------|-----------|
 | **Access Keys** | `S3_ACCESS_KEY` + `S3_SECRET_KEY` set | Never expires |
-| **IAM Role** (assume role) | `S3_ROLE_ARN` set | 45 min |
-| **Web Identity** | `S3_ROLE_ARN` + `S3_WEB_IDENTITY` set | 45 min |
-| **IAM Instance Profile** | No credentials provided | 30 min |
+| **IAM Role** (assume role) | `S3_ROLE_ARN` set | Until credential expiry (from STS) |
+| **Web Identity** | `S3_ROLE_ARN` + `S3_WEB_IDENTITY` set | Until credential expiry (from STS) |
+| **IAM Instance Profile** | No credentials provided | Until credential expiry |
 
 ### Security Features
 

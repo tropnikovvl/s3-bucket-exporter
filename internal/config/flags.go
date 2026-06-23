@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Config struct {
@@ -23,6 +25,9 @@ type Config struct {
 	S3Region         string
 	S3ForcePathStyle bool
 	S3SkipTLSVerify  bool
+	S3MaxConcurrency int
+
+	ScrapeIntervalDuration time.Duration
 }
 
 func InitFlags() *Config {
@@ -38,6 +43,7 @@ func InitFlags() *Config {
 	flag.StringVar(&cfg.S3Region, "s3_region", envString("S3_REGION", "us-east-1"), "S3 region")
 	flag.BoolVar(&cfg.S3ForcePathStyle, "s3_force_path_style", envBool("S3_FORCE_PATH_STYLE", false), "Use path-style S3 URLs")
 	flag.BoolVar(&cfg.S3SkipTLSVerify, "s3_skip_tls_verify", envBool("S3_SKIP_TLS_VERIFY", false), "Skip TLS verification for S3 connections")
+	flag.IntVar(&cfg.S3MaxConcurrency, "s3_max_concurrency", envInt("S3_MAX_CONCURRENCY", 25), "Maximum number of buckets listed in parallel")
 	return cfg
 }
 
@@ -56,11 +62,21 @@ func envBool(key string, def bool) bool {
 	return x
 }
 
+func envInt(key string, def int) int {
+	x, err := strconv.Atoi(os.Getenv(key))
+	if err != nil {
+		return def
+	}
+	return x
+}
+
 func (c *Config) Validate() error {
 	var errs []string
 
-	if _, err := time.ParseDuration(c.ScrapeInterval); err != nil {
+	if d, err := time.ParseDuration(c.ScrapeInterval); err != nil {
 		errs = append(errs, fmt.Sprintf("invalid scrape interval '%s': %v", c.ScrapeInterval, err))
+	} else {
+		c.ScrapeIntervalDuration = d
 	}
 
 	if c.S3Endpoint != "" {
@@ -82,11 +98,11 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("listen port '%s' must start with ':' (e.g., ':9655')", c.ListenPort))
 	}
 
-	validLogLevels := map[string]bool{
-		"debug": true, "info": true, "warn": true,
-		"error": true, "fatal": true, "panic": true,
+	if c.S3MaxConcurrency < 1 {
+		errs = append(errs, fmt.Sprintf("max concurrency '%d' must be at least 1", c.S3MaxConcurrency))
 	}
-	if !validLogLevels[strings.ToLower(c.LogLevel)] {
+
+	if _, err := log.ParseLevel(c.LogLevel); err != nil {
 		errs = append(errs, fmt.Sprintf("invalid log level '%s': must be one of debug, info, warn, error, fatal, panic", c.LogLevel))
 	}
 
