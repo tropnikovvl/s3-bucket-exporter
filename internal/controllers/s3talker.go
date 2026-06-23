@@ -39,7 +39,6 @@ func distinct(input []string) []string {
 func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterface, s3BucketNames string) (S3Summary, error) {
 	summary := S3Summary{
 		StorageClasses: make(map[string]StorageClassMetrics),
-		S3Buckets:      make([]Bucket, 0),
 	}
 
 	var bucketNames []string
@@ -60,6 +59,7 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	}
 
 	log.Debugf("List of buckets in %s region: %v", s3Region, bucketNames)
+	summary.S3Buckets = make([]Bucket, 0, len(bucketNames))
 
 	var (
 		wg   sync.WaitGroup
@@ -146,17 +146,14 @@ func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3C
 				storageClass = "STANDARD"
 			}
 
-			var size int64
-			if ver.Size != nil {
-				size = *ver.Size
-			}
+			size := float64(aws.ToInt64(ver.Size))
 
 			metrics := storageClasses[storageClass]
-			if ver.IsLatest != nil && *ver.IsLatest {
-				metrics.CurrentSize += float64(size)
+			if aws.ToBool(ver.IsLatest) {
+				metrics.CurrentSize += size
 				metrics.CurrentObjectNumber++
 			} else {
-				metrics.NoncurrentSize += float64(size)
+				metrics.NoncurrentSize += size
 				metrics.NoncurrentObjectNumber++
 			}
 			storageClasses[storageClass] = metrics

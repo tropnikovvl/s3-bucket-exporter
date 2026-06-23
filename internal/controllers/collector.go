@@ -88,26 +88,35 @@ func (c *S3Collector) Collect(ch chan<- prometheus.Metric) {
 
 	log.Debugf("Cached S3 metrics %s: %+v", c.s3Endpoint, m)
 
-	for class, s3Metrics := range m.StorageClasses {
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.CurrentSize, c.s3Endpoint, c.s3Region, class, "current")
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_size"], prometheus.GaugeValue, s3Metrics.NoncurrentSize, c.s3Endpoint, c.s3Region, class, "noncurrent")
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.CurrentObjectNumber, c.s3Endpoint, c.s3Region, class, "current")
-		ch <- prometheus.MustNewConstMetric(metricsDesc["total_objects"], prometheus.GaugeValue, s3Metrics.NoncurrentObjectNumber, c.s3Endpoint, c.s3Region, class, "noncurrent")
-	}
+	emitStorageClassMetrics(ch, metricsDesc["total_size"], metricsDesc["total_objects"], m.StorageClasses, c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["total_delete_markers"], prometheus.GaugeValue, m.DeleteMarkers, c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_count"], prometheus.GaugeValue, float64(m.BucketCount), c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["failed_buckets"], prometheus.GaugeValue, float64(m.FailedBucketCount), c.s3Endpoint, c.s3Region)
 	ch <- prometheus.MustNewConstMetric(metricsDesc["total_duration"], prometheus.GaugeValue, m.TotalListDuration.Seconds(), c.s3Endpoint, c.s3Region)
 
 	for _, bucket := range m.S3Buckets {
-		for class, s3Metrics := range bucket.StorageClasses {
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_size"], prometheus.GaugeValue, s3Metrics.CurrentSize, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "current")
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_size"], prometheus.GaugeValue, s3Metrics.NoncurrentSize, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "noncurrent")
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_objects"], prometheus.GaugeValue, s3Metrics.CurrentObjectNumber, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "current")
-			ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_objects"], prometheus.GaugeValue, s3Metrics.NoncurrentObjectNumber, c.s3Endpoint, c.s3Region, bucket.BucketName, class, "noncurrent")
-		}
+		emitStorageClassMetrics(ch, metricsDesc["bucket_size"], metricsDesc["bucket_objects"], bucket.StorageClasses, c.s3Endpoint, c.s3Region, bucket.BucketName)
 		ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_delete_markers"], prometheus.GaugeValue, bucket.DeleteMarkers, c.s3Endpoint, c.s3Region, bucket.BucketName)
 		ch <- prometheus.MustNewConstMetric(metricsDesc["bucket_duration"], prometheus.GaugeValue, bucket.ListDuration.Seconds(), c.s3Endpoint, c.s3Region, bucket.BucketName)
+	}
+}
+
+// emitStorageClassMetrics emits the current/noncurrent size and object-count
+// series for each storage class. baseLabels are the leading label values shared
+// by every series (endpoint, region[, bucketName]); storageClass and
+// versionStatus are appended per series.
+func emitStorageClassMetrics(ch chan<- prometheus.Metric, sizeDesc, objectsDesc *prometheus.Desc, classes map[string]StorageClassMetrics, baseLabels ...string) {
+	labels := func(class, versionStatus string) []string {
+		out := make([]string, 0, len(baseLabels)+2)
+		out = append(out, baseLabels...)
+		return append(out, class, versionStatus)
+	}
+
+	for class, m := range classes {
+		ch <- prometheus.MustNewConstMetric(sizeDesc, prometheus.GaugeValue, m.CurrentSize, labels(class, "current")...)
+		ch <- prometheus.MustNewConstMetric(sizeDesc, prometheus.GaugeValue, m.NoncurrentSize, labels(class, "noncurrent")...)
+		ch <- prometheus.MustNewConstMetric(objectsDesc, prometheus.GaugeValue, m.CurrentObjectNumber, labels(class, "current")...)
+		ch <- prometheus.MustNewConstMetric(objectsDesc, prometheus.GaugeValue, m.NoncurrentObjectNumber, labels(class, "noncurrent")...)
 	}
 }
 
