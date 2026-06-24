@@ -277,7 +277,7 @@ func TestListRange_BoundaryKeyCountedOnce(t *testing.T) {
 // double-counted across adjacent ranges on such a backend.
 func TestListRange_LowerBoundExcludesMarkerKey(t *testing.T) {
 	data := []fakeObj{
-		{key: "k", version: "v1", size: 10},               // boundary key (version)
+		{key: "k", version: "v1", size: 10},                // boundary key (version)
 		{key: "k", version: "vd", size: 0, isDelete: true}, // boundary key (delete marker)
 		{key: "z", version: "v1", size: 2},
 	}
