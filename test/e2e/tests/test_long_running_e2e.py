@@ -38,6 +38,10 @@ class TestLongRunningE2E:
     LARGE_FILE_SIZE = 1024 * 1024  # 1 MB
     XLARGE_FILE_SIZE = 1024 * 1024 * 5  # 5 MB
 
+    # Storage classes exercised by uploads/overwrites; the exporter must track
+    # each independently (verification derives truth from S3, no bookkeeping here).
+    STORAGE_CLASSES = ["STANDARD", "GLACIER", "STANDARD_IA"]
+
     @pytest.fixture(scope="class")
     def test_buckets(self, s3_client):
         """Create test buckets for the long-running test, including versioned ones."""
@@ -91,9 +95,10 @@ class TestLongRunningE2E:
         key = self.generate_random_key()
         content = self.generate_random_content(size)
         actual_size = len(content)
+        storage_class = random.choice(self.STORAGE_CLASSES)
 
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content)
-        logger.info(f"  -> Uploaded {key} to {bucket} ({actual_size} bytes)")
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content, StorageClass=storage_class)
+        logger.info(f"  -> Uploaded {key} to {bucket} ({actual_size} bytes, {storage_class})")
 
         return key, actual_size
 
@@ -101,9 +106,10 @@ class TestLongRunningE2E:
         """Overwrite an existing file (creates noncurrent version on versioned buckets). Returns new size."""
         content = self.generate_random_content(size)
         actual_size = len(content)
+        storage_class = random.choice(self.STORAGE_CLASSES)
 
-        s3_client.put_object(Bucket=bucket, Key=key, Body=content)
-        logger.info(f"  -> Overwrote {key} in {bucket} ({actual_size} bytes)")
+        s3_client.put_object(Bucket=bucket, Key=key, Body=content, StorageClass=storage_class)
+        logger.info(f"  -> Overwrote {key} in {bucket} ({actual_size} bytes, {storage_class})")
 
         return actual_size
 
