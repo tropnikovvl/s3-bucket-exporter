@@ -1,32 +1,22 @@
-import pytest
-import boto3
-import requests
-import time
 import logging
-import os
 import random
 import string
-from typing import Dict, List, Tuple
+import time
+from typing import Dict, Tuple
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+import pytest
+
+from e2elib.metrics import fetch_metrics, parse_metrics
+from e2elib.state import get_actual_bucket_state
+from e2elib.verify import verify_metrics_match_state
+from conftest import S3_EXPORTER_URL
+
 logger = logging.getLogger(__name__)
-
-# Environment configuration
-S3_ENDPOINT = os.getenv("S3_ENDPOINT", "http://localhost:4566")
-S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "test")
-S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "test")
-S3_REGION = os.getenv("S3_REGION", "us-east-1")
-S3_EXPORTER_URL = os.getenv("S3_EXPORTER_URL", "http://localhost:9655/metrics")
 
 # Test configuration
 TEST_DURATION_SECONDS = 180  # 3 minutes
 CHECK_INTERVAL_SECONDS = 10  # Check metrics every 10 seconds
 SCRAPE_INTERVAL_SECONDS = 3  # Exporter scrape interval
-WARMUP_SECONDS = 10  # Wait time for exporter to collect initial metrics
 
 
 class TestLongRunningE2E:
@@ -49,22 +39,8 @@ class TestLongRunningE2E:
     XLARGE_FILE_SIZE = 1024 * 1024 * 5  # 5 MB
 
     @pytest.fixture(scope="class")
-    def s3_client(self):
-        """Create S3 client using environment variables."""
-        logger.info(f"Creating S3 client with endpoint: {S3_ENDPOINT}")
-        return boto3.client(
-            "s3",
-            endpoint_url=S3_ENDPOINT,
-            aws_access_key_id=S3_ACCESS_KEY,
-            aws_secret_access_key=S3_SECRET_KEY,
-            region_name=S3_REGION,
-        )
-
-    @pytest.fixture(scope="class")
     def test_buckets(self, s3_client):
         """Create test buckets for the long-running test, including versioned ones."""
-        time.sleep(5)  # Wait for services to be ready
-
         plain_buckets = [
             "long-test-bucket-1",
             "long-test-bucket-2",
@@ -136,242 +112,7 @@ class TestLongRunningE2E:
         s3_client.delete_object(Bucket=bucket, Key=key)
         logger.info(f"  <- Deleted {key} from {bucket}")
 
-    def get_actual_bucket_state(self, s3_client, bucket_info: Dict) -> Dict:
-        """
-        Get the actual state of all buckets from S3 using list_object_versions.
-
-        Returns a dictionary with current/noncurrent counts and sizes, plus delete markers.
-        """
-        state = {}
-
-        for bucket in bucket_info["all"]:
-            try:
-                current_count = 0
-                current_size = 0
-                noncurrent_count = 0
-                noncurrent_size = 0
-                delete_markers = 0
-
-                paginator = s3_client.get_paginator('list_object_versions')
-                for page in paginator.paginate(Bucket=bucket):
-                    for ver in page.get('Versions', []):
-                        if ver.get('IsLatest', False):
-                            current_count += 1
-                            current_size += ver['Size']
-                        else:
-                            noncurrent_count += 1
-                            noncurrent_size += ver['Size']
-
-                    for _ in page.get('DeleteMarkers', []):
-                        delete_markers += 1
-
-                state[bucket] = {
-                    'current_count': current_count,
-                    'current_size': current_size,
-                    'noncurrent_count': noncurrent_count,
-                    'noncurrent_size': noncurrent_size,
-                    'delete_markers': delete_markers,
-                }
-            except Exception as e:
-                logger.error(f"Failed to get state for bucket '{bucket}': {e}")
-                state[bucket] = {
-                    'current_count': 0, 'current_size': 0,
-                    'noncurrent_count': 0, 'noncurrent_size': 0,
-                    'delete_markers': 0,
-                }
-
-        return state
-
-    def fetch_exporter_metrics(self) -> str:
-        """Fetch metrics from the S3 exporter."""
-        try:
-            response = requests.get(S3_EXPORTER_URL, timeout=5)
-            response.raise_for_status()
-            return response.text
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch metrics from exporter: {e}")
-            raise
-
-    def parse_exporter_metrics(self, metrics_text: str) -> Dict:
-        """Parse exporter metrics into a structured dictionary with version status."""
-        parsed_metrics = {}
-
-        for line in metrics_text.splitlines():
-            if line.startswith("#") or not line.strip():
-                continue
-
-            try:
-                if 's3_bucket_delete_markers' in line:
-                    bucket = line.split('bucketName="')[1].split('"')[0]
-                    count = float(line.split()[-1])
-                    parsed_metrics.setdefault(bucket, {})["delete_markers"] = count
-
-                elif 's3_total_delete_markers' in line:
-                    count = float(line.split()[-1])
-                    parsed_metrics["total_delete_markers"] = count
-
-                elif 's3_bucket_object_number' in line:
-                    bucket = line.split('bucketName="')[1].split('"')[0]
-                    storage_class = line.split('storageClass="')[1].split('"')[0]
-                    version_status = line.split('versionStatus="')[1].split('"')[0]
-                    count = float(line.split()[-1])
-                    parsed_metrics.setdefault(bucket, {}).setdefault("storage_classes", {}).setdefault(storage_class, {}).setdefault("object_count", {})[version_status] = count
-
-                elif 's3_bucket_size' in line:
-                    bucket = line.split('bucketName="')[1].split('"')[0]
-                    storage_class = line.split('storageClass="')[1].split('"')[0]
-                    version_status = line.split('versionStatus="')[1].split('"')[0]
-                    size = float(line.split()[-1])
-                    parsed_metrics.setdefault(bucket, {}).setdefault("storage_classes", {}).setdefault(storage_class, {}).setdefault("total_size", {})[version_status] = size
-
-                elif 's3_total_object_number' in line:
-                    storage_class = line.split('storageClass="')[1].split('"')[0]
-                    version_status = line.split('versionStatus="')[1].split('"')[0]
-                    total_objects = float(line.split()[-1])
-                    parsed_metrics.setdefault("total", {}).setdefault("storage_classes", {}).setdefault(storage_class, {}).setdefault("object_count", {})[version_status] = total_objects
-
-                elif 's3_total_size' in line:
-                    storage_class = line.split('storageClass="')[1].split('"')[0]
-                    version_status = line.split('versionStatus="')[1].split('"')[0]
-                    total_size = float(line.split()[-1])
-                    parsed_metrics.setdefault("total", {}).setdefault("storage_classes", {}).setdefault(storage_class, {}).setdefault("total_size", {})[version_status] = total_size
-
-                elif 's3_endpoint_up' in line:
-                    endpoint_up = float(line.split()[-1])
-                    parsed_metrics["endpoint_up"] = endpoint_up
-
-                elif 's3_bucket_count' in line:
-                    bucket_count = float(line.split()[-1])
-                    parsed_metrics["bucket_count"] = bucket_count
-
-            except (IndexError, ValueError) as e:
-                logger.debug(f"Skipping metrics line: {line}. Error: {e}")
-
-        return parsed_metrics
-
-    def verify_metrics_match_state(self, actual_state: Dict, exporter_metrics: Dict, check_number: int):
-        """Verify that exporter metrics match the actual S3 state."""
-        logger.info(f"--- Check #{check_number}: Verifying metrics ---")
-
-        # Verify endpoint is up
-        assert exporter_metrics.get("endpoint_up") == 1, \
-            f"Check #{check_number}: Endpoint should be up"
-
-        # Verify bucket count (exporter counts all buckets, including empty ones)
-        expected_bucket_count = len(actual_state)
-        actual_bucket_count = exporter_metrics.get("bucket_count", 0)
-        assert actual_bucket_count == expected_bucket_count, \
-            f"Check #{check_number}: Bucket count mismatch. Expected: {expected_bucket_count}, Got: {actual_bucket_count}"
-
-        storage_class = "STANDARD"
-        total_errors = []
-
-        # Verify per-bucket metrics
-        for bucket, state in actual_state.items():
-            bucket_data = exporter_metrics.get(bucket, {})
-            bucket_metrics = bucket_data.get("storage_classes", {}).get(storage_class, {})
-
-            # Verify current object count
-            actual_current_count = bucket_metrics.get("object_count", {}).get("current", 0)
-            if actual_current_count != state['current_count']:
-                total_errors.append(
-                    f"Bucket '{bucket}' current object count mismatch. "
-                    f"Expected: {state['current_count']}, Got: {actual_current_count}"
-                )
-
-            # Verify current size
-            actual_current_size = bucket_metrics.get("total_size", {}).get("current", 0)
-            if actual_current_size != state['current_size']:
-                total_errors.append(
-                    f"Bucket '{bucket}' current size mismatch. "
-                    f"Expected: {state['current_size']}, Got: {actual_current_size}"
-                )
-
-            # Verify noncurrent object count
-            actual_noncurrent_count = bucket_metrics.get("object_count", {}).get("noncurrent", 0)
-            if actual_noncurrent_count != state['noncurrent_count']:
-                total_errors.append(
-                    f"Bucket '{bucket}' noncurrent object count mismatch. "
-                    f"Expected: {state['noncurrent_count']}, Got: {actual_noncurrent_count}"
-                )
-
-            # Verify noncurrent size
-            actual_noncurrent_size = bucket_metrics.get("total_size", {}).get("noncurrent", 0)
-            if actual_noncurrent_size != state['noncurrent_size']:
-                total_errors.append(
-                    f"Bucket '{bucket}' noncurrent size mismatch. "
-                    f"Expected: {state['noncurrent_size']}, Got: {actual_noncurrent_size}"
-                )
-
-            # Verify delete markers
-            actual_dm = bucket_data.get("delete_markers", 0)
-            if actual_dm != state['delete_markers']:
-                total_errors.append(
-                    f"Bucket '{bucket}' delete markers mismatch. "
-                    f"Expected: {state['delete_markers']}, Got: {actual_dm}"
-                )
-
-            logger.info(
-                f"  OK {bucket}: current={state['current_count']}/{int(actual_current_count)}, "
-                f"noncurrent={state['noncurrent_count']}/{int(actual_noncurrent_count)}, "
-                f"dm={state['delete_markers']}/{int(actual_dm)}"
-            )
-
-        if total_errors:
-            error_msg = f"Check #{check_number} failed with {len(total_errors)} error(s):\n" + "\n".join(total_errors)
-            logger.error(error_msg)
-            raise AssertionError(error_msg)
-
-        # Verify total metrics
-        logger.info("  Verifying total metrics...")
-        expected_total_current_count = sum(s['current_count'] for s in actual_state.values())
-        expected_total_current_size = sum(s['current_size'] for s in actual_state.values())
-        expected_total_noncurrent_count = sum(s['noncurrent_count'] for s in actual_state.values())
-        expected_total_noncurrent_size = sum(s['noncurrent_size'] for s in actual_state.values())
-        expected_total_dm = sum(s['delete_markers'] for s in actual_state.values())
-
-        total_metrics = exporter_metrics.get("total", {}).get("storage_classes", {}).get(storage_class, {})
-
-        actual_total_current_count = total_metrics.get("object_count", {}).get("current", 0)
-        actual_total_noncurrent_count = total_metrics.get("object_count", {}).get("noncurrent", 0)
-        actual_total_current_size = total_metrics.get("total_size", {}).get("current", 0)
-        actual_total_noncurrent_size = total_metrics.get("total_size", {}).get("noncurrent", 0)
-        actual_total_dm = exporter_metrics.get("total_delete_markers", 0)
-
-        if actual_total_current_count != expected_total_current_count:
-            raise AssertionError(
-                f"Check #{check_number}: Total current object count mismatch. "
-                f"Expected: {expected_total_current_count}, Got: {actual_total_current_count}"
-            )
-        if actual_total_current_size != expected_total_current_size:
-            raise AssertionError(
-                f"Check #{check_number}: Total current size mismatch. "
-                f"Expected: {expected_total_current_size}, Got: {actual_total_current_size}"
-            )
-        if actual_total_noncurrent_count != expected_total_noncurrent_count:
-            raise AssertionError(
-                f"Check #{check_number}: Total noncurrent object count mismatch. "
-                f"Expected: {expected_total_noncurrent_count}, Got: {actual_total_noncurrent_count}"
-            )
-        if actual_total_noncurrent_size != expected_total_noncurrent_size:
-            raise AssertionError(
-                f"Check #{check_number}: Total noncurrent size mismatch. "
-                f"Expected: {expected_total_noncurrent_size}, Got: {actual_total_noncurrent_size}"
-            )
-        if actual_total_dm != expected_total_dm:
-            raise AssertionError(
-                f"Check #{check_number}: Total delete markers mismatch. "
-                f"Expected: {expected_total_dm}, Got: {actual_total_dm}"
-            )
-
-        logger.info(
-            f"  OK Total: current_obj={expected_total_current_count}/{int(actual_total_current_count)}, "
-            f"noncurrent_obj={expected_total_noncurrent_count}/{int(actual_total_noncurrent_count)}, "
-            f"dm={expected_total_dm}/{int(actual_total_dm)}"
-        )
-        logger.info(f"Check #{check_number}: All metrics verified successfully")
-
-    def test_long_running_dynamic_s3_operations(self, s3_client, test_buckets):
+    def test_long_running_dynamic_s3_operations(self, s3_client, test_buckets, exporter_ready):
         """
         Long-running test that performs dynamic S3 operations and verifies exporter correctness.
 
@@ -391,10 +132,6 @@ class TestLongRunningE2E:
 
         # Track files in each bucket: key -> size
         bucket_files: Dict[str, Dict[str, int]] = {bucket: {} for bucket in test_buckets["all"]}
-
-        # Wait for exporter to initialize
-        logger.info(f"Waiting {WARMUP_SECONDS} seconds for exporter to initialize...")
-        time.sleep(WARMUP_SECONDS)
 
         start_time = time.time()
         check_number = 0
@@ -458,16 +195,12 @@ class TestLongRunningE2E:
             logger.info(f"Waiting {wait_time} seconds for exporter to scrape metrics...")
             time.sleep(wait_time)
 
-            # Get actual state from S3 (using list_object_versions)
-            actual_state = self.get_actual_bucket_state(s3_client, test_buckets)
+            # Get actual state from S3 and compare against the exporter
+            actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
+            exporter_metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
 
-            # Get metrics from exporter
-            metrics_text = self.fetch_exporter_metrics()
-            exporter_metrics = self.parse_exporter_metrics(metrics_text)
-
-            # Verify metrics match actual state
             check_number += 1
-            self.verify_metrics_match_state(actual_state, exporter_metrics, check_number)
+            verify_metrics_match_state(actual_state, exporter_metrics, label=f"Check #{check_number}")
 
             # Calculate time until next check
             next_check_time = CHECK_INTERVAL_SECONDS - wait_time
@@ -482,12 +215,11 @@ class TestLongRunningE2E:
 
         time.sleep(SCRAPE_INTERVAL_SECONDS * 2)
 
-        actual_state = self.get_actual_bucket_state(s3_client, test_buckets)
-        metrics_text = self.fetch_exporter_metrics()
-        exporter_metrics = self.parse_exporter_metrics(metrics_text)
+        actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
+        exporter_metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
 
         check_number += 1
-        self.verify_metrics_match_state(actual_state, exporter_metrics, check_number)
+        verify_metrics_match_state(actual_state, exporter_metrics, label=f"Check #{check_number} (final)")
 
         # Print test summary
         logger.info("\n" + "=" * 80)
