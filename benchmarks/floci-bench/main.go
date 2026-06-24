@@ -103,10 +103,10 @@ func run() int {
 	// using a fresh context so it runs even after ctx was cancelled by a signal.
 	if *cleanup {
 		defer func() {
-			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			defer cancel()
 			fmt.Println(">> cleaning up bucket...")
-			n, err := cleanBucket(cctx, client, *bucket)
+			n, err := cleanBucket(cctx, client, *bucket, *seedWorkers)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "cleanup error (after deleting %d): %v\n", n, err)
 				return
@@ -227,15 +227,21 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 	return nil
 }
 
-// cleanBucket deletes all objects in the bucket (page by page, up to 1000 per
-// DeleteObjects call) and returns how many were removed.
-func cleanBucket(ctx context.Context, client *s3.Client, bucket string) (int, error) {
+// cleanBucket deletes all objects in the bucket and returns how many were
+// removed. Listing is sequential (paginated), but the per-page DeleteObjects
+// calls (up to 1000 keys each) run concurrently with up to `workers` in flight,
+// so cleaning hundreds of thousands of objects does not serialize on RTT.
+func cleanBucket(ctx context.Context, client *s3.Client, bucket string, workers int) (int, error) {
 	p := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
-	total := 0
+	var total int64
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			return total, err
+			_ = g.Wait()
+			return int(atomic.LoadInt64(&total)), err
 		}
 		if len(page.Contents) == 0 {
 			continue
@@ -244,15 +250,21 @@ func cleanBucket(ctx context.Context, client *s3.Client, bucket string) (int, er
 		for _, o := range page.Contents {
 			ids = append(ids, types.ObjectIdentifier{Key: o.Key})
 		}
-		if _, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-			Bucket: aws.String(bucket),
-			Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
-		}); err != nil {
-			return total, err
-		}
-		total += len(ids)
+		g.Go(func() error {
+			if _, err := client.DeleteObjects(gctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(bucket),
+				Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+			}); err != nil {
+				return err
+			}
+			atomic.AddInt64(&total, int64(len(ids)))
+			return nil
+		})
 	}
-	return total, nil
+	if err := g.Wait(); err != nil {
+		return int(atomic.LoadInt64(&total)), err
+	}
+	return int(atomic.LoadInt64(&total)), nil
 }
 
 func humanizeBytes(b int64) string {
