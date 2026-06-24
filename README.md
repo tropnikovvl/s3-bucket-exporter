@@ -98,9 +98,16 @@ The exporter supports both command-line arguments and environment variables (arg
 | LOG_LEVEL | -log_level | Logging level | info | debug |
 | LOG_FORMAT | -log_format | Log format | text | json |
 | SCRAPE_INTERVAL | -scrape_interval | Metrics update interval | 5m | 30s |
-| S3_MAX_CONCURRENCY | -s3_max_concurrency | Maximum number of buckets listed in parallel | 25 | 50 |
+| S3_MAX_CONCURRENCY | -s3_max_concurrency | Maximum number of concurrent S3 LIST operations | 25 | 50 |
 
 > Warning: For security reasons, avoid passing credentials via command line arguments
+
+### Listing performance
+
+Large buckets are listed in parallel: the exporter discovers a bucket's key
+structure via the `/` delimiter and lists key ranges concurrently. The total
+number of in-flight S3 LIST operations across all buckets and ranges is bounded
+by `S3_MAX_CONCURRENCY`.
 
 ## Authentication
 

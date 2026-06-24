@@ -41,13 +41,15 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 		StorageClasses: make(map[string]StorageClassMetrics),
 	}
 
+	client := newLimitedClient(s3Client, maxConcurrency)
+
 	var bucketNames []string
 	start := time.Now()
 
 	if s3BucketNames != "" {
 		bucketNames = distinct(strings.Split(s3BucketNames, ","))
 	} else {
-		result, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{BucketRegion: aws.String(s3Region)})
+		result, err := client.ListBuckets(ctx, &s3.ListBucketsInput{BucketRegion: aws.String(s3Region)})
 		if err != nil {
 			log.Errorf("Failed to list buckets: %v", err)
 			return summary, errors.New("unable to connect to S3 endpoint")
@@ -67,11 +69,10 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	}
 	results := make([]bucketResult, len(bucketNames))
 
-	g := new(errgroup.Group)
-	g.SetLimit(maxConcurrency)
+	g := new(errgroup.Group) // concurrency bounded by the limited client, not here
 	for i, bucketName := range bucketNames {
 		g.Go(func() error {
-			storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(ctx, bucketName, s3Client)
+			storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(ctx, bucketName, client, maxConcurrency)
 			if err != nil {
 				results[i] = bucketResult{err: err}
 				return nil // collect failures; never cancel sibling buckets
@@ -119,57 +120,61 @@ func S3UsageInfo(ctx context.Context, s3Region string, s3Client S3ClientInterfac
 	return summary, nil
 }
 
-// calculateBucketMetrics computes the total size, object count, and delete markers for a bucket
-func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface) (map[string]StorageClassMetrics, float64, time.Duration, error) {
-	storageClasses := make(map[string]StorageClassMetrics)
-	var deleteMarkers float64
-	var keyMarker *string
-	var versionIDMarker *string
+const discoverCandidateFactor = 4
 
+// calculateBucketMetrics lists one bucket via discovered key ranges in parallel.
+// shards is the target number of ranges (≈ the global concurrency budget); a
+// bucket with no discoverable structure lists as a single range (sequential).
+func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface, shards int) (map[string]StorageClassMetrics, float64, time.Duration, error) {
 	start := time.Now()
 
-	for {
-		page, err := s3Client.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{
-			Bucket:          aws.String(bucketName),
-			KeyMarker:       keyMarker,
-			VersionIdMarker: versionIDMarker,
+	raw, err := discoverBoundaries(ctx, s3Client, bucketName, shards*discoverCandidateFactor, discoverMaxDepth)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Warnf("Discovery aborted for bucket %s: scrape deadline exceeded", bucketName)
+		} else {
+			log.Errorf("Failed to discover prefixes for bucket %s: %v", bucketName, err)
+		}
+		return nil, 0, 0, err
+	}
+	bounds := coalesceBoundaries(raw, shards)
+
+	// Build contiguous (lo, hi] ranges: (",b1], (b1,b2], …, (bn,"].
+	los := append([]string{""}, bounds...)
+	his := append(append([]string{}, bounds...), "")
+
+	type rangeResult struct {
+		storageClasses map[string]StorageClassMetrics
+		deleteMarkers  float64
+	}
+	results := make([]rangeResult, len(los))
+	g, gctx := errgroup.WithContext(ctx)
+	for i := range los {
+		g.Go(func() error {
+			sc, dm, e := listRange(gctx, s3Client, bucketName, los[i], his[i])
+			if e != nil {
+				return e
+			}
+			results[i] = rangeResult{storageClasses: sc, deleteMarkers: dm}
+			return nil
 		})
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				log.Warnf("Listing aborted for bucket %s: scrape deadline exceeded", bucketName)
-			} else {
-				log.Errorf("Failed to list object versions for bucket %s: %v", bucketName, err)
-			}
-			return nil, 0, 0, err
-		}
-
-		for _, ver := range page.Versions {
-			storageClass := string(ver.StorageClass)
-			if storageClass == "" {
-				storageClass = "STANDARD"
-			}
-
-			size := float64(aws.ToInt64(ver.Size))
-
-			metrics := storageClasses[storageClass]
-			if aws.ToBool(ver.IsLatest) {
-				metrics.CurrentSize += size
-				metrics.CurrentObjectNumber++
-			} else {
-				metrics.NoncurrentSize += size
-				metrics.NoncurrentObjectNumber++
-			}
-			storageClasses[storageClass] = metrics
-		}
-
-		deleteMarkers += float64(len(page.DeleteMarkers))
-
-		if page.IsTruncated == nil || !*page.IsTruncated {
-			break
-		}
-		keyMarker = page.NextKeyMarker
-		versionIDMarker = page.NextVersionIdMarker
+	}
+	if err := g.Wait(); err != nil {
+		return nil, 0, 0, err
 	}
 
-	return storageClasses, deleteMarkers, time.Since(start), nil
+	merged := make(map[string]StorageClassMetrics)
+	var deleteMarkers float64
+	for _, r := range results {
+		deleteMarkers += r.deleteMarkers
+		for sc, m := range r.storageClasses {
+			mm := merged[sc]
+			mm.CurrentSize += m.CurrentSize
+			mm.CurrentObjectNumber += m.CurrentObjectNumber
+			mm.NoncurrentSize += m.NoncurrentSize
+			mm.NoncurrentObjectNumber += m.NoncurrentObjectNumber
+			merged[sc] = mm
+		}
+	}
+	return merged, deleteMarkers, time.Since(start), nil
 }

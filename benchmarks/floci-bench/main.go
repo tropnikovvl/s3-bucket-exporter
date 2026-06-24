@@ -56,6 +56,8 @@ func run() int {
 	objSize := flag.Int("obj-size", 1024, "Object payload size in bytes (capped at 5120)")
 	layout := flag.String("layout", "nested", "Key layout: flat | nested")
 	prefixes := flag.Int("prefixes", 256, "Top-level prefixes for the nested layout")
+	versions := flag.Int("versions", 30000, "Number of objects given an extra (noncurrent) version (enables bucket versioning)")
+	deleteMarkers := flag.Int("delete-markers", 10000, "Number of objects to delete-mark (enables bucket versioning)")
 	seedWorkers := flag.Int("seed-workers", 64, "Concurrent PUTs while seeding")
 
 	concurrency := flag.Int("concurrency", 25, "maxConcurrency passed to S3UsageInfo")
@@ -116,7 +118,7 @@ func run() int {
 	}
 
 	if *seed {
-		if err := seedBucket(ctx, client, *bucket, *objects, *objSize, *layout, *prefixes, *seedWorkers); err != nil {
+		if err := seedBucket(ctx, client, *bucket, *objects, *objSize, *layout, *prefixes, *seedWorkers, *versions, *deleteMarkers); err != nil {
 			fmt.Fprintf(os.Stderr, "seed error: %v\n", err)
 			return 1
 		}
@@ -148,31 +150,72 @@ func keyFor(i, n, prefixes int, layout string) string {
 	}
 }
 
-func seedBucket(ctx context.Context, client *s3.Client, bucket string, objects, objSize int, layout string, prefixes, workers int) error {
+// selectEven picks exactly min(count, total) indices out of [0, total), spread
+// evenly across the range.
+func selectEven(i, total, count int) bool {
+	if count <= 0 || total <= 0 {
+		return false
+	}
+	return (i+1)*count/total > i*count/total
+}
+
+func seedBucket(ctx context.Context, client *s3.Client, bucket string, objects, objSize int, layout string, prefixes, workers, versions, deleteMarkers int) error {
 	_, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
 	if err != nil && !alreadyExists(err) {
 		return fmt.Errorf("create bucket: %w", err)
 	}
 
+	if versions > 0 || deleteMarkers > 0 {
+		if _, err := client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+			Bucket:                  aws.String(bucket),
+			VersioningConfiguration: &types.VersioningConfiguration{Status: types.BucketVersioningStatusEnabled},
+		}); err != nil {
+			return fmt.Errorf("enable versioning: %w", err)
+		}
+	}
+
 	payload := make([]byte, objSize)
-	fmt.Printf("Seeding %d objects (%d B each, layout=%s) with %d workers...\n", objects, objSize, layout, workers)
+	fmt.Printf("Seeding %d objects (%d B each, layout=%s) + %d versions + %d delete markers, %d workers...\n",
+		objects, objSize, layout, versions, deleteMarkers, workers)
 	start := time.Now()
 
-	var done int64
+	// stepFor returns a logging interval that yields ~5 progress lines.
+	stepFor := func(n int) int64 {
+		if s := int64(n) / 5; s > 0 {
+			return s
+		}
+		return 1
+	}
+	verStep := stepFor(versions)
+
+	// Phase 1: PUT objects (selected keys get a second PUT → noncurrent version).
+	fmt.Println(">> phase 1: putting objects (and versions)...")
+	var done, extra int64
 	g := new(errgroup.Group)
 	g.SetLimit(workers)
 	for i := 0; i < objects; i++ {
 		g.Go(func() error {
-			_, err := client.PutObject(ctx, &s3.PutObjectInput{
-				Bucket: aws.String(bucket),
-				Key:    aws.String(keyFor(i, objects, prefixes, layout)),
-				Body:   bytes.NewReader(payload),
-			})
-			if err != nil {
-				return err
+			key := keyFor(i, objects, prefixes, layout)
+			puts := 1
+			if selectEven(i, objects, versions) {
+				puts = 2
+			}
+			for p := 0; p < puts; p++ {
+				if _, err := client.PutObject(ctx, &s3.PutObjectInput{
+					Bucket: aws.String(bucket),
+					Key:    aws.String(key),
+					Body:   bytes.NewReader(payload),
+				}); err != nil {
+					return err
+				}
+			}
+			if puts == 2 {
+				if v := atomic.AddInt64(&extra, 1); v%verStep == 0 {
+					fmt.Printf("  versions %d/%d (%s)\n", v, versions, time.Since(start).Round(time.Second))
+				}
 			}
 			if n := atomic.AddInt64(&done, 1); n%10000 == 0 {
-				fmt.Printf("  seeded %d/%d (%s)\n", n, objects, time.Since(start).Round(time.Second))
+				fmt.Printf("  objects %d/%d (%s)\n", n, objects, time.Since(start).Round(time.Second))
 			}
 			return nil
 		})
@@ -180,7 +223,40 @@ func seedBucket(ctx context.Context, client *s3.Client, bucket string, objects, 
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("put object: %w", err)
 	}
-	fmt.Printf("Seed complete: %d objects in %s\n\n", objects, time.Since(start).Round(time.Millisecond))
+
+	// Phase 2: delete-mark selected keys (DeleteObject without VersionId on a
+	// versioned bucket adds a delete marker over the current version).
+	var marked int64
+	if deleteMarkers > 0 {
+		fmt.Println(">> phase 2: delete-marking keys...")
+		dmStep := stepFor(deleteMarkers)
+		dg := new(errgroup.Group)
+		dg.SetLimit(workers)
+		for i := 0; i < objects; i++ {
+			if !selectEven(i, objects, deleteMarkers) {
+				continue
+			}
+			key := keyFor(i, objects, prefixes, layout)
+			dg.Go(func() error {
+				if _, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
+					Bucket: aws.String(bucket),
+					Key:    aws.String(key),
+				}); err != nil {
+					return err
+				}
+				if m := atomic.AddInt64(&marked, 1); m%dmStep == 0 {
+					fmt.Printf("  delete-markers %d/%d (%s)\n", m, deleteMarkers, time.Since(start).Round(time.Second))
+				}
+				return nil
+			})
+		}
+		if err := dg.Wait(); err != nil {
+			return fmt.Errorf("delete-mark: %w", err)
+		}
+	}
+
+	fmt.Printf("Seed complete: %d objects + %d versions + %d delete markers in %s\n\n",
+		objects, atomic.LoadInt64(&extra), atomic.LoadInt64(&marked), time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -204,17 +280,19 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 		}
 		durations = append(durations, elapsed)
 
-		var objs, size float64
+		var current, versions, size float64
 		for _, m := range summary.StorageClasses {
-			objs += m.CurrentObjectNumber + m.NoncurrentObjectNumber
+			current += m.CurrentObjectNumber
+			versions += m.NoncurrentObjectNumber
 			size += m.CurrentSize + m.NoncurrentSize
 		}
+		entries := current + versions + summary.DeleteMarkers // total entries the listing walked
 		rate := 0.0
 		if elapsed > 0 {
-			rate = objs / elapsed.Seconds()
+			rate = entries / elapsed.Seconds()
 		}
-		fmt.Printf("  run %d: objects=%.0f  size=%s  deleteMarkers=%.0f  duration=%s  (%.0f obj/s)\n",
-			r, objs, humanizeBytes(int64(size)), summary.DeleteMarkers, elapsed.Round(time.Millisecond), rate)
+		fmt.Printf("  run %d: objects=%.0f  versions=%.0f  deleteMarkers=%.0f  size=%s  duration=%s  (%.0f entries/s)\n",
+			r, current, versions, summary.DeleteMarkers, humanizeBytes(int64(size)), elapsed.Round(time.Millisecond), rate)
 	}
 
 	if runs > 1 {
@@ -227,12 +305,13 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 	return nil
 }
 
-// cleanBucket deletes all objects in the bucket and returns how many were
-// removed. Listing is sequential (paginated), but the per-page DeleteObjects
-// calls (up to 1000 keys each) run concurrently with up to `workers` in flight,
-// so cleaning hundreds of thousands of objects does not serialize on RTT.
+// cleanBucket removes every version and delete marker from the bucket and
+// returns how many were removed. It lists via ListObjectVersions and deletes by
+// (Key, VersionId) so it fully empties a versioned bucket (a plain delete on a
+// versioned bucket would only add delete markers). Listing is sequential
+// (paginated); per-page DeleteObjects calls run concurrently (up to `workers`).
 func cleanBucket(ctx context.Context, client *s3.Client, bucket string, workers int) (int, error) {
-	p := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+	p := s3.NewListObjectVersionsPaginator(client, &s3.ListObjectVersionsInput{Bucket: aws.String(bucket)})
 	var total int64
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -243,12 +322,15 @@ func cleanBucket(ctx context.Context, client *s3.Client, bucket string, workers 
 			_ = g.Wait()
 			return int(atomic.LoadInt64(&total)), err
 		}
-		if len(page.Contents) == 0 {
-			continue
+		ids := make([]types.ObjectIdentifier, 0, len(page.Versions)+len(page.DeleteMarkers))
+		for _, v := range page.Versions {
+			ids = append(ids, types.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
 		}
-		ids := make([]types.ObjectIdentifier, 0, len(page.Contents))
-		for _, o := range page.Contents {
-			ids = append(ids, types.ObjectIdentifier{Key: o.Key})
+		for _, dm := range page.DeleteMarkers {
+			ids = append(ids, types.ObjectIdentifier{Key: dm.Key, VersionId: dm.VersionId})
+		}
+		if len(ids) == 0 {
+			continue
 		}
 		g.Go(func() error {
 			if _, err := client.DeleteObjects(gctx, &s3.DeleteObjectsInput{

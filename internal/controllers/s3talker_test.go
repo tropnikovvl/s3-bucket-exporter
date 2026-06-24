@@ -84,6 +84,12 @@ func TestS3UsageInfo_VersionedBucket(t *testing.T) {
 func TestS3UsageInfo_FailedBucket(t *testing.T) {
 	mockClient := new(MockS3Client)
 
+	// Discovery probes (Delimiter set) return no CommonPrefixes → each bucket
+	// lists as a single range; the per-bucket matchers below drive success/error.
+	mockClient.On("ListObjectVersions", mock.Anything,
+		mock.MatchedBy(func(in *s3.ListObjectVersionsInput) bool { return in.Delimiter != nil }),
+		mock.Anything).Return(&s3.ListObjectVersionsOutput{IsTruncated: aws.Bool(false)}, nil)
+
 	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
 		Bucket:          aws.String("bucket1"),
 		KeyMarker:       (*string)(nil),
@@ -236,7 +242,7 @@ func TestCalculateBucketMetrics(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient)
+	storageClasses, deleteMarkers, duration, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient, 4)
 
 	assert.NoError(t, err)
 	assert.Equal(t, float64(1024), storageClasses["STANDARD"].CurrentSize)
@@ -255,6 +261,14 @@ func TestCalculateBucketMetrics_Pagination(t *testing.T) {
 
 	nextKey := "key2"
 	nextVersionID := "v2"
+
+	// Discovery probes with Prefix+Delimiter; return no CommonPrefixes so the
+	// bucket lists as a single range and the pagination matchers below apply.
+	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
+		Bucket:    aws.String("bucket1"),
+		Prefix:    aws.String(""),
+		Delimiter: aws.String("/"),
+	}, mock.Anything).Return(&s3.ListObjectVersionsOutput{IsTruncated: aws.Bool(false)}, nil)
 
 	mockClient.On("ListObjectVersions", mock.Anything, &s3.ListObjectVersionsInput{
 		Bucket:          aws.String("bucket1"),
@@ -280,7 +294,7 @@ func TestCalculateBucketMetrics_Pagination(t *testing.T) {
 		IsTruncated: aws.Bool(false),
 	}, nil)
 
-	storageClasses, deleteMarkers, _, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient)
+	storageClasses, deleteMarkers, _, err := calculateBucketMetrics(context.Background(), "bucket1", mockClient, 4)
 
 	assert.NoError(t, err)
 	assert.Equal(t, float64(3072), storageClasses["STANDARD"].CurrentSize)

@@ -135,17 +135,25 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		})
 	}
 
-	if a.cfg.SkipTLSVerify {
+	if a.cfg.SkipTLSVerify || a.cfg.MaxIdleConns > 0 {
 		baseTransport, ok := http.DefaultTransport.(*http.Transport)
 		if !ok {
 			baseTransport = &http.Transport{}
 		}
 		customTransport := baseTransport.Clone()
-		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in via S3_SKIP_TLS_VERIFY
+		if a.cfg.MaxIdleConns > 0 {
+			// Size the connection pool to the LIST concurrency budget so parallel
+			// listing reuses keep-alive connections instead of churning TLS handshakes.
+			customTransport.MaxIdleConns = a.cfg.MaxIdleConns
+			customTransport.MaxIdleConnsPerHost = a.cfg.MaxIdleConns
+		}
+		if a.cfg.SkipTLSVerify {
+			customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in via S3_SKIP_TLS_VERIFY
+			log.Debug("TLS verification is disabled")
+		}
 		options = append(options, config.WithHTTPClient(&http.Client{
 			Transport: customTransport,
 		}))
-		log.Debug("TLS verification is disabled")
 	}
 
 	switch a.cfg.Method {

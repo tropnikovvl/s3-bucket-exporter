@@ -24,6 +24,8 @@ OBJECTS="${OBJECTS:-300000}"
 OBJ_SIZE="${OBJ_SIZE:-1024}"
 LAYOUT="${LAYOUT:-nested}"
 PREFIXES="${PREFIXES:-256}"
+VERSIONS="${VERSIONS:-30000}"
+DELETE_MARKERS="${DELETE_MARKERS:-10000}"
 SEED_WORKERS="${SEED_WORKERS:-64}"
 CONCURRENCY="${CONCURRENCY:-25}"
 RUNS="${RUNS:-3}"
@@ -98,7 +100,7 @@ esac
 args=(
   -endpoint "$ENDPOINT" -bucket "$BUCKET" -region "$REGION"
   -objects "$OBJECTS" -obj-size "$OBJ_SIZE" -layout "$LAYOUT"
-  -prefixes "$PREFIXES" -seed-workers "$SEED_WORKERS"
+  -prefixes "$PREFIXES" -versions "$VERSIONS" -delete-markers "$DELETE_MARKERS" -seed-workers "$SEED_WORKERS"
   -concurrency "$CONCURRENCY" -runs "$RUNS"
 )
 if [ -n "$ACCESS_KEY" ]; then args+=(-access-key "$ACCESS_KEY"); fi

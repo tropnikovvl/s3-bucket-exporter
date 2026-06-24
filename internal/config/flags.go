@@ -43,7 +43,7 @@ func InitFlags() *Config {
 	flag.StringVar(&cfg.S3Region, "s3_region", envString("S3_REGION", "us-east-1"), "S3 region")
 	flag.BoolVar(&cfg.S3ForcePathStyle, "s3_force_path_style", envBool("S3_FORCE_PATH_STYLE", false), "Use path-style S3 URLs")
 	flag.BoolVar(&cfg.S3SkipTLSVerify, "s3_skip_tls_verify", envBool("S3_SKIP_TLS_VERIFY", false), "Skip TLS verification for S3 connections")
-	flag.IntVar(&cfg.S3MaxConcurrency, "s3_max_concurrency", envInt("S3_MAX_CONCURRENCY", 25), "Maximum number of buckets listed in parallel")
+	flag.IntVar(&cfg.S3MaxConcurrency, "s3_max_concurrency", envInt("S3_MAX_CONCURRENCY", 25), "Maximum number of concurrent S3 LIST operations")
 	return cfg
 }
 
