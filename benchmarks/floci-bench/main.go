@@ -4,14 +4,16 @@
 // the same measurement is comparable across code versions (e.g. master vs a
 // sharded-listing branch).
 //
-// Start floci first:
+// Against floci (local mock), use run.sh which manages the container.
 //
-//	docker run --rm -p 4566:4566 -e FLOCI_HOSTNAME=floci hectorvent/floci:latest
+// Against a real (manually created, empty) bucket — seed, measure, and delete
+// all objects afterwards (also on Ctrl-C):
 //
-// Seed once, then measure (repeatedly):
+//	go run ./benchmarks/floci-bench -bucket my-empty-bucket -region us-east-1 \
+//	    -seed -cleanup -objects 300000 -obj-size 1024 -layout nested -runs 3
 //
-//	go run ./benchmarks/floci-bench -seed -objects 300000 -obj-size 1024 -layout nested
-//	go run ./benchmarks/floci-bench -runs 3 -concurrency 25
+// Credentials come from the default chain (env / profile / IAM) when
+// -access-key is empty; pass -access-key/-secret-key for static keys.
 package main
 
 import (
@@ -21,9 +23,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -36,14 +40,18 @@ import (
 
 const maxObjSize = 5 * 1024 // objects must not exceed 5 KB
 
-func main() {
-	endpoint := flag.String("endpoint", "http://localhost:4566", "floci/S3 endpoint URL")
-	region := flag.String("region", "us-east-1", "S3 region")
-	accessKey := flag.String("access-key", "test", "S3 access key")
-	secretKey := flag.String("secret-key", "test", "S3 secret key")
-	bucket := flag.String("bucket", "bench", "Bucket name")
+func main() { os.Exit(run()) }
 
-	seed := flag.Bool("seed", false, "Create the bucket and seed it with objects before measuring")
+func run() int {
+	endpoint := flag.String("endpoint", "", "S3 endpoint URL (empty = real AWS; floci: http://localhost:4566)")
+	region := flag.String("region", "us-east-1", "S3 region")
+	accessKey := flag.String("access-key", "", "S3 access key (empty = IAM / default credential chain)")
+	secretKey := flag.String("secret-key", "", "S3 secret key")
+	bucket := flag.String("bucket", "bench", "Bucket name (must already exist)")
+	pathStyle := flag.Bool("path-style", true, "Path-style addressing (auto: false when -endpoint is empty / real AWS)")
+
+	seed := flag.Bool("seed", false, "Seed the bucket with objects before measuring")
+	cleanup := flag.Bool("cleanup", false, "Delete all objects from the bucket on exit (and on interrupt)")
 	objects := flag.Int("objects", 300000, "Number of objects to seed")
 	objSize := flag.Int("obj-size", 1024, "Object payload size in bytes (capped at 5120)")
 	layout := flag.String("layout", "nested", "Key layout: flat | nested")
@@ -56,10 +64,18 @@ func main() {
 
 	if *objSize > maxObjSize {
 		fmt.Fprintf(os.Stderr, "error: -obj-size must not exceed %d bytes\n", maxObjSize)
-		os.Exit(2)
+		return 2
 	}
 
-	ctx := context.Background()
+	// Path-style defaults to false for real AWS (empty endpoint) unless set.
+	usePathStyle := *pathStyle
+	if *endpoint == "" && !flagSet("path-style") {
+		usePathStyle = false
+	}
+
+	// Cancel in-flight work on Ctrl-C / SIGTERM; cleanup still runs afterwards.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	authCfg := auth.AuthConfig{
 		Region:    *region,
@@ -68,25 +84,59 @@ func main() {
 		SecretKey: *secretKey,
 	}
 	authCfg.Method = auth.DetectAuthMethod(authCfg)
-	awsCfg, err := auth.NewAWSAuth(authCfg).GetConfig(ctx)
+	awsCfg, err := auth.NewAWSAuth(authCfg).GetConfig(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to configure AWS auth: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true // floci requires path-style addressing
+		o.UsePathStyle = usePathStyle
 	})
 
-	fmt.Printf("Endpoint: %s   Bucket: %s   Region: %s\n", *endpoint, *bucket, *region)
+	dest := *endpoint
+	if dest == "" {
+		dest = "AWS (" + *region + ")"
+	}
+	fmt.Printf("Endpoint: %s   Bucket: %s   Region: %s   Auth: %s\n", dest, *bucket, *region, authCfg.Method)
+
+	// Always clean up seeded data on the way out — normal exit or interrupt —
+	// using a fresh context so it runs even after ctx was cancelled by a signal.
+	if *cleanup {
+		defer func() {
+			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			fmt.Println(">> cleaning up bucket...")
+			n, err := cleanBucket(cctx, client, *bucket)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "cleanup error (after deleting %d): %v\n", n, err)
+				return
+			}
+			fmt.Printf("Cleaned up %d objects\n", n)
+		}()
+	}
 
 	if *seed {
 		if err := seedBucket(ctx, client, *bucket, *objects, *objSize, *layout, *prefixes, *seedWorkers); err != nil {
 			fmt.Fprintf(os.Stderr, "seed error: %v\n", err)
-			os.Exit(1)
+			return 1
 		}
 	}
 
-	measure(ctx, client, *bucket, *region, *concurrency, *runs)
+	if err := measure(ctx, client, *bucket, *region, *concurrency, *runs); err != nil {
+		fmt.Fprintf(os.Stderr, "measure error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func flagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func keyFor(i, n, prefixes int, layout string) string {
@@ -142,7 +192,7 @@ func alreadyExists(err error) bool {
 		strings.Contains(err.Error(), "BucketAlreadyExists")
 }
 
-func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, region string, concurrency, runs int) {
+func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, region string, concurrency, runs int) error {
 	fmt.Printf("Measuring S3UsageInfo (concurrency=%d, runs=%d)...\n", concurrency, runs)
 	durations := make([]time.Duration, 0, runs)
 	for r := 1; r <= runs; r++ {
@@ -150,8 +200,7 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 		summary, err := controllers.S3UsageInfo(ctx, region, client, bucket, concurrency)
 		elapsed := time.Since(start)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  run %d error: %v\n", r, err)
-			os.Exit(1)
+			return fmt.Errorf("run %d: %w", r, err)
 		}
 		durations = append(durations, elapsed)
 
@@ -175,6 +224,35 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 			durations[len(durations)/2].Round(time.Millisecond),
 			durations[len(durations)-1].Round(time.Millisecond))
 	}
+	return nil
+}
+
+// cleanBucket deletes all objects in the bucket (page by page, up to 1000 per
+// DeleteObjects call) and returns how many were removed.
+func cleanBucket(ctx context.Context, client *s3.Client, bucket string) (int, error) {
+	p := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+	total := 0
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return total, err
+		}
+		if len(page.Contents) == 0 {
+			continue
+		}
+		ids := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, o := range page.Contents {
+			ids = append(ids, types.ObjectIdentifier{Key: o.Key})
+		}
+		if _, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(bucket),
+			Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+		}); err != nil {
+			return total, err
+		}
+		total += len(ids)
+	}
+	return total, nil
 }
 
 func humanizeBytes(b int64) string {
