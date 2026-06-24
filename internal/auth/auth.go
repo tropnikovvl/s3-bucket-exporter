@@ -16,6 +16,7 @@ type AuthConfig struct {
 	RoleARN       string
 	WebIdentity   string
 	SkipTLSVerify bool
+	MaxIdleConns  int
 }
 
 // DetectAuthMethod determines the authentication method based on available parameters

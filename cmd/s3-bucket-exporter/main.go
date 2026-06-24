@@ -27,6 +27,7 @@ func updateMetrics(ctx context.Context, collector *controllers.S3Collector, cfg 
 		AccessKey:     cfg.S3AccessKey,
 		SecretKey:     cfg.S3SecretKey,
 		SkipTLSVerify: cfg.S3SkipTLSVerify,
+		MaxIdleConns:  cfg.S3MaxConcurrency,
 	}
 
 	authCfg.Method = auth.DetectAuthMethod(authCfg)

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,25 @@ func TestGetAWSConfigValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetConfig_SetsConnectionPool(t *testing.T) {
+	a := NewAWSAuth(AuthConfig{
+		Region:       "us-east-1",
+		Method:       AuthMethodKeys,
+		AccessKey:    "k",
+		SecretKey:    "s",
+		MaxIdleConns: 25,
+	})
+	cfg, err := a.GetConfig(context.Background())
+	require.NoError(t, err)
+
+	hc, ok := cfg.HTTPClient.(*http.Client)
+	require.True(t, ok, "expected a *http.Client")
+	tr, ok := hc.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, 25, tr.MaxIdleConnsPerHost)
+	assert.Equal(t, 25, tr.MaxIdleConns)
 }
 
 func TestGetConfig_SkipTLSVerify(t *testing.T) {
