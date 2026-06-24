@@ -1,11 +1,10 @@
 import logging
-import time
 
 import pytest
 
 from e2elib.metrics import fetch_metrics, parse_metrics
-from e2elib.state import get_actual_bucket_state
-from e2elib.verify import verify_metrics_match_state
+from e2elib.state import class_metrics, get_actual_bucket_state
+from e2elib.verify import verify_with_retry
 from conftest import S3_EXPORTER_URL
 
 logger = logging.getLogger(__name__)
@@ -35,28 +34,23 @@ STORAGECLASS_OBJECTS = [
 # against test-setup drift and a buggy list_object_versions, neither of which a
 # state-derived comparison alone would catch (since the exporter reads the same
 # listing). Sizes are byte lengths of the contents created in populate_s3.
-def _std(cc, cs, ncc=0, ncs=0):
-    return {"current_count": cc, "current_size": cs,
-            "noncurrent_count": ncc, "noncurrent_size": ncs}
-
-
 EXPECTED_STATE = {
     # file1.txt ("Hello World"*100=1100) + file2.txt ("Test Content"*50=600)
-    "test-bucket-1": {"storage_classes": {"STANDARD": _std(2, 1700)}, "delete_markers": 0},
+    "test-bucket-1": {"storage_classes": {"STANDARD": class_metrics(2, 1700)}, "delete_markers": 0},
     # data.txt ("Random Data"*75=825)
-    "test-bucket-2": {"storage_classes": {"STANDARD": _std(1, 825)}, "delete_markers": 0},
+    "test-bucket-2": {"storage_classes": {"STANDARD": class_metrics(1, 825)}, "delete_markers": 0},
     # versioned.txt v2 (27) + regular.txt (24) current; versioned.txt v1 (19) +
     # to-delete.txt original (20) noncurrent; 1 delete marker for to-delete.txt
     "test-bucket-versioned": {
-        "storage_classes": {"STANDARD": _std(2, 51, 2, 39)},
+        "storage_classes": {"STANDARD": class_metrics(2, 51, 2, 39)},
         "delete_markers": 1,
     },
     # one current object per class: STANDARD 20, GLACIER 28, STANDARD_IA 22
     "test-bucket-storageclass": {
         "storage_classes": {
-            "STANDARD": _std(1, 20),
-            "GLACIER": _std(1, 28),
-            "STANDARD_IA": _std(1, 22),
+            "STANDARD": class_metrics(1, 20),
+            "GLACIER": class_metrics(1, 28),
+            "STANDARD_IA": class_metrics(1, 22),
         },
         "delete_markers": 0,
     },
@@ -102,14 +96,19 @@ class TestS3BucketExporter:
 
     def test_exporter_metrics(self, s3_client, populate_s3, exporter_ready):
         """Verify exporter metrics match the actual S3 state."""
-        time.sleep(10)  # allow at least one scrape cycle after population
         actual_state = get_actual_bucket_state(s3_client, ALL_BUCKETS)
+        # Independent literal oracle first — immediate, does not depend on the
+        # exporter, so it catches setup/listing drift on its own.
         assert actual_state == EXPECTED_STATE, (
             f"S3 state does not match the intended scenario.\n"
             f"Expected: {EXPECTED_STATE}\nGot: {actual_state}"
         )
-        metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
-        verify_metrics_match_state(actual_state, metrics, label="short-running")
+        # Then poll until the exporter has scraped this state (no fixed sleep).
+        verify_with_retry(
+            actual_state,
+            lambda: parse_metrics(fetch_metrics(S3_EXPORTER_URL)),
+            label="short-running",
+        )
         logger.info("All short-running checks passed")
 
 

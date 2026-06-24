@@ -1,12 +1,10 @@
 """Verify exporter metrics against the actual S3 state, per storage class."""
 import logging
+import time
+
+from e2elib.state import class_metrics
 
 logger = logging.getLogger(__name__)
-
-
-def _zero():
-    return {"current_count": 0, "current_size": 0,
-            "noncurrent_count": 0, "noncurrent_size": 0}
 
 
 def _class_checks(prefix, actual_class, exporter_class):
@@ -25,7 +23,7 @@ def _class_checks(prefix, actual_class, exporter_class):
 
 def verify_metrics_match_state(actual_state: dict, exporter_metrics: dict, label: str = "check") -> None:
     """Assert exporter metrics equal the actual S3 state. Raises AssertionError on any mismatch."""
-    logger.info(f"--- {label}: Verifying metrics ---")
+    logger.debug(f"--- {label}: Verifying metrics ---")
 
     assert exporter_metrics.get("endpoint_up") == 1, f"{label}: Endpoint should be up"
 
@@ -48,10 +46,10 @@ def verify_metrics_match_state(actual_state: dict, exporter_metrics: dict, label
         actual_classes = bstate["storage_classes"]
 
         for sc in set(actual_classes) | set(exporter_classes):
-            actual_class = actual_classes.get(sc, _zero())
+            actual_class = actual_classes.get(sc, class_metrics())
             errors.extend(_class_checks(f"Bucket '{bucket}' [{sc}]",
                                         actual_class, exporter_classes.get(sc, {})))
-            agg = expected_totals.setdefault(sc, _zero())
+            agg = expected_totals.setdefault(sc, class_metrics())
             for k in agg:
                 agg[k] += actual_class[k]
 
@@ -63,16 +61,17 @@ def verify_metrics_match_state(actual_state: dict, exporter_metrics: dict, label
             )
 
     if errors:
-        msg = f"{label} failed with {len(errors)} error(s):\n" + "\n".join(errors)
-        logger.error(msg)
-        raise AssertionError(msg)
+        # Do not log here: under verify_with_retry a failed attempt is an
+        # expected transient (exporter hasn't scraped yet). The message rides
+        # on the AssertionError, which surfaces only if retries are exhausted.
+        raise AssertionError(f"{label} failed with {len(errors)} error(s):\n" + "\n".join(errors))
 
     # Per-class totals.
     total_classes = exporter_metrics.get("total", {}).get("storage_classes", {})
     total_errors = []
     for sc in set(expected_totals) | set(total_classes):
         total_errors.extend(_class_checks(f"Total [{sc}]",
-                                           expected_totals.get(sc, _zero()),
+                                           expected_totals.get(sc, class_metrics()),
                                            total_classes.get(sc, {})))
     if total_errors:
         raise AssertionError(f"{label} total mismatch:\n" + "\n".join(total_errors))
@@ -86,3 +85,26 @@ def verify_metrics_match_state(actual_state: dict, exporter_metrics: dict, label
         )
 
     logger.info(f"{label}: All metrics verified successfully")
+
+
+def verify_with_retry(actual_state: dict, get_metrics, label: str = "check",
+                      timeout: float = 30, interval: float = 3) -> None:
+    """Poll ``get_metrics()`` until the exporter matches ``actual_state``.
+
+    ``actual_state`` must be a stable snapshot (S3 is not mutated during the
+    call), so the exporter can only converge toward it. Returns once
+    ``verify_metrics_match_state`` passes; if it never converges within
+    ``timeout``, the final attempt's AssertionError propagates with full detail.
+    This replaces fixed post-mutation sleeps: it finishes as soon as the next
+    scrape lands and tolerates a slow/late scrape instead of asserting on a
+    single stale read.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            verify_metrics_match_state(actual_state, get_metrics(), label=label)
+            return
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(interval)

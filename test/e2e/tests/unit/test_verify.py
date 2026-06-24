@@ -1,6 +1,6 @@
 import pytest
 
-from e2elib.verify import verify_metrics_match_state
+from e2elib.verify import verify_metrics_match_state, verify_with_retry
 
 
 def _cls(cc=0, cs=0, ncc=0, ncs=0):
@@ -68,3 +68,22 @@ def test_verify_checks_delete_markers_and_endpoint():
     metrics["endpoint_up"] = 0
     with pytest.raises(AssertionError):
         verify_metrics_match_state(state, metrics, label="t")
+
+
+def test_verify_with_retry_converges():
+    state = {"b1": {"storage_classes": {"STANDARD": _cls(cc=1, cs=10)}, "delete_markers": 0}}
+    good = _metrics({"b1": {"storage_classes": {"STANDARD": _em_cls(cc=1, cs=10)}, "delete_markers": 0}},
+                    {"STANDARD": _em_cls(cc=1, cs=10)}, bucket_count=1)
+    bad = _metrics({"b1": {"storage_classes": {"STANDARD": _em_cls(cc=9, cs=10)}, "delete_markers": 0}},
+                   {"STANDARD": _em_cls(cc=9, cs=10)}, bucket_count=1)
+    seq = [bad, bad, good]
+    verify_with_retry(state, lambda: seq.pop(0), label="t", timeout=5, interval=0)
+    assert seq == []  # consumed exactly up to the matching snapshot
+
+
+def test_verify_with_retry_times_out_with_detail():
+    state = {"b1": {"storage_classes": {"STANDARD": _cls(cc=1, cs=10)}, "delete_markers": 0}}
+    bad = _metrics({"b1": {"storage_classes": {"STANDARD": _em_cls(cc=9, cs=10)}, "delete_markers": 0}},
+                   {"STANDARD": _em_cls(cc=9, cs=10)}, bucket_count=1)
+    with pytest.raises(AssertionError):
+        verify_with_retry(state, lambda: bad, label="t", timeout=0.05, interval=0.01)

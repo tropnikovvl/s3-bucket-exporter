@@ -33,19 +33,24 @@ def s3_client():
 
 @pytest.fixture(scope="session")
 def exporter_ready():
-    """Block until the exporter is serving parseable metrics.
+    """Block until the exporter has completed a successful scrape cycle.
 
-    Readiness only means the exporter is up and has completed a scrape cycle
-    (the ``s3_endpoint_up`` series is present). It deliberately does NOT wait
-    for ``endpoint_up == 1``: the exporter only sets that once at least one
-    bucket exists (see internal/controllers/s3talker.go), which happens later
-    in the per-test setup. The ``endpoint_up == 1`` assertion lives in the
+    Gates on the ``s3_bucket_count`` series being present rather than
+    ``s3_endpoint_up``: on a scrape error the exporter emits ``s3_endpoint_up``
+    alone and returns early (see internal/controllers/collector.go), so keying
+    on ``endpoint_up`` would clear readiness on a degraded payload.
+    ``bucket_count`` is emitted only after a successful scrape (and is present
+    even with zero buckets), so it signals a genuinely-ready exporter.
+
+    This deliberately does NOT wait for ``endpoint_up == 1``: the exporter only
+    sets that once at least one bucket exists (see s3talker.go), which happens
+    later in per-test setup. The ``endpoint_up == 1`` assertion lives in the
     verifier, which runs after buckets are created.
     """
-    def _serving():
+    def _scrape_completed():
         metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
-        return "endpoint_up" in metrics
+        return "bucket_count" in metrics
 
-    logger.info("Waiting for exporter to start serving metrics...")
-    wait_until(_serving, timeout=60, interval=2)
-    logger.info("Exporter is serving metrics")
+    logger.info("Waiting for exporter to complete a scrape cycle...")
+    wait_until(_scrape_completed, timeout=60, interval=2)
+    logger.info("Exporter is ready")

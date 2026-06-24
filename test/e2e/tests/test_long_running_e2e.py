@@ -2,21 +2,20 @@ import logging
 import random
 import string
 import time
-from typing import Dict, Tuple
+from typing import Dict, Set, Tuple
 
 import pytest
 
 from e2elib.metrics import fetch_metrics, parse_metrics
 from e2elib.state import get_actual_bucket_state
-from e2elib.verify import verify_metrics_match_state
+from e2elib.verify import verify_with_retry
 from conftest import S3_EXPORTER_URL
 
 logger = logging.getLogger(__name__)
 
 # Test configuration
 TEST_DURATION_SECONDS = 180  # 3 minutes
-CHECK_INTERVAL_SECONDS = 10  # Check metrics every 10 seconds
-SCRAPE_INTERVAL_SECONDS = 3  # Exporter scrape interval
+SCRAPE_INTERVAL_SECONDS = 3  # Exporter scrape interval (poll cadence for verification)
 
 
 class TestLongRunningE2E:
@@ -81,8 +80,8 @@ class TestLongRunningE2E:
         }
 
     def generate_random_content(self, size: int) -> bytes:
-        """Generate random content of specified size."""
-        return ''.join(random.choices(string.ascii_letters + string.digits, k=size)).encode()
+        """Generate random content of specified size (used only for its length)."""
+        return random.randbytes(size)
 
     def generate_random_key(self) -> str:
         """Generate a random object key."""
@@ -131,13 +130,14 @@ class TestLongRunningE2E:
         logger.info("=" * 80)
         logger.info("Starting Long-Running E2E Test")
         logger.info(f"Duration: {TEST_DURATION_SECONDS} seconds ({TEST_DURATION_SECONDS // 60} minutes)")
-        logger.info(f"Check interval: {CHECK_INTERVAL_SECONDS} seconds")
         logger.info(f"Plain buckets: {test_buckets['plain']}")
         logger.info(f"Versioned buckets: {test_buckets['versioned']}")
         logger.info("=" * 80)
 
-        # Track files in each bucket: key -> size
-        bucket_files: Dict[str, Dict[str, int]] = {bucket: {} for bucket in test_buckets["all"]}
+        # Track which object keys currently exist per bucket (to pick
+        # delete/overwrite targets). Sizes/classes are not tracked here —
+        # verification derives all truth from S3 via get_actual_bucket_state.
+        bucket_files: Dict[str, Set[str]] = {bucket: set() for bucket in test_buckets["all"]}
 
         start_time = time.time()
         check_number = 0
@@ -176,56 +176,50 @@ class TestLongRunningE2E:
                         self.LARGE_FILE_SIZE,
                         self.XLARGE_FILE_SIZE,
                     ])
-                    key, actual_size = self.upload_random_file(s3_client, bucket, size)
-                    bucket_files[bucket][key] = actual_size
+                    key, _ = self.upload_random_file(s3_client, bucket, size)
+                    bucket_files[bucket].add(key)
                     operation_count += 1
 
                 elif operation == 'delete':
-                    key = random.choice(list(bucket_files[bucket].keys()))
+                    key = random.choice(list(bucket_files[bucket]))
                     self.delete_file(s3_client, bucket, key)
-                    del bucket_files[bucket][key]
+                    bucket_files[bucket].discard(key)
                     operation_count += 1
 
                 elif operation == 'overwrite':
-                    key = random.choice(list(bucket_files[bucket].keys()))
+                    key = random.choice(list(bucket_files[bucket]))
                     new_size = random.choice([
                         self.SMALL_FILE_SIZE,
                         self.MEDIUM_FILE_SIZE,
                     ])
-                    actual_size = self.overwrite_file(s3_client, bucket, key, new_size)
-                    bucket_files[bucket][key] = actual_size
+                    self.overwrite_file(s3_client, bucket, key, new_size)
                     operation_count += 1
 
-            # Wait for exporter to scrape metrics
-            wait_time = SCRAPE_INTERVAL_SECONDS * 2
-            logger.info(f"Waiting {wait_time} seconds for exporter to scrape metrics...")
-            time.sleep(wait_time)
-
-            # Get actual state from S3 and compare against the exporter
-            actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
-            exporter_metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
-
+            # Snapshot S3, then poll until the exporter converges to it. This
+            # replaces a fixed sleep: it finishes as soon as the next scrape
+            # lands and tolerates a slow scrape instead of racing it.
             check_number += 1
-            verify_metrics_match_state(actual_state, exporter_metrics, label=f"Check #{check_number}")
-
-            # Calculate time until next check
-            next_check_time = CHECK_INTERVAL_SECONDS - wait_time
-            if next_check_time > 0:
-                logger.info(f"Waiting {next_check_time} seconds until next check...")
-                time.sleep(next_check_time)
+            actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
+            verify_with_retry(
+                actual_state,
+                lambda: parse_metrics(fetch_metrics(S3_EXPORTER_URL)),
+                label=f"Check #{check_number}",
+                interval=SCRAPE_INTERVAL_SECONDS,
+            )
 
         # Final verification
         logger.info("\n" + "=" * 80)
         logger.info("Performing final verification...")
         logger.info("=" * 80)
 
-        time.sleep(SCRAPE_INTERVAL_SECONDS * 2)
-
-        actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
-        exporter_metrics = parse_metrics(fetch_metrics(S3_EXPORTER_URL))
-
         check_number += 1
-        verify_metrics_match_state(actual_state, exporter_metrics, label=f"Check #{check_number} (final)")
+        actual_state = get_actual_bucket_state(s3_client, test_buckets["all"])
+        verify_with_retry(
+            actual_state,
+            lambda: parse_metrics(fetch_metrics(S3_EXPORTER_URL)),
+            label=f"Check #{check_number} (final)",
+            interval=SCRAPE_INTERVAL_SECONDS,
+        )
 
         # Print test summary
         logger.info("\n" + "=" * 80)
