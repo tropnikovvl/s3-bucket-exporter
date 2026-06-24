@@ -66,9 +66,16 @@ func listRange(ctx context.Context, client S3ClientInterface, bucket, lo, hi str
 
 		crossed := false
 		for _, ver := range page.Versions {
-			if hi != "" && aws.ToString(ver.Key) > hi {
+			key := aws.ToString(ver.Key)
+			if hi != "" && key > hi {
 				crossed = true
 				break
+			}
+			// Enforce the exclusive lower bound ourselves: AWS treats KeyMarker as
+			// exclusive, but some S3-compatible backends return the marker key, which
+			// would double-count a boundary key across adjacent ranges.
+			if lo != "" && key <= lo {
+				continue
 			}
 			storageClass := string(ver.StorageClass)
 			if storageClass == "" {
@@ -86,9 +93,13 @@ func listRange(ctx context.Context, client S3ClientInterface, bucket, lo, hi str
 			storageClasses[storageClass] = metrics
 		}
 		for _, dm := range page.DeleteMarkers {
-			if hi != "" && aws.ToString(dm.Key) > hi {
+			key := aws.ToString(dm.Key)
+			if hi != "" && key > hi {
 				crossed = true
 				break
+			}
+			if lo != "" && key <= lo {
+				continue
 			}
 			deleteMarkers++
 		}

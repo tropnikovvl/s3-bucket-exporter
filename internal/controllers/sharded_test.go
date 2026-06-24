@@ -26,11 +26,12 @@ type fakeObj struct {
 // fakeS3 implements S3ClientInterface with realistic (KeyMarker, VersionIdMarker)
 // pagination and Prefix/Delimiter grouping into CommonPrefixes.
 type fakeS3 struct {
-	objs     []fakeObj // sorted by key ascending; versions of a key contiguous
-	pageSize int
-	inFlight int32
-	maxSeen  int32
-	calls    int32
+	objs            []fakeObj // sorted by key ascending; versions of a key contiguous
+	pageSize        int
+	inclusiveMarker bool // model a backend that treats KeyMarker as inclusive
+	inFlight        int32
+	maxSeen         int32
+	calls           int32
 }
 
 func (f *fakeS3) ListBuckets(_ context.Context, _ *s3.ListBucketsInput, _ ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
@@ -82,7 +83,11 @@ func (f *fakeS3) listFlat(view []fakeObj, km, vm string) *s3.ListObjectVersionsO
 			}
 		}
 	default:
-		start = sort.Search(len(view), func(i int) bool { return view[i].key > km })
+		if f.inclusiveMarker {
+			start = sort.Search(len(view), func(i int) bool { return view[i].key >= km })
+		} else {
+			start = sort.Search(len(view), func(i int) bool { return view[i].key > km })
+		}
 	}
 	end := start + f.pageSize
 	if end > len(view) {
@@ -264,4 +269,24 @@ func TestListRange_BoundaryKeyCountedOnce(t *testing.T) {
 
 	total := scLow["STANDARD"].CurrentObjectNumber + scHigh["STANDARD"].CurrentObjectNumber
 	assert.Equal(t, float64(5), total, "boundary key 'k' counted exactly once across the two ranges")
+}
+
+// Some S3-compatible backends treat KeyMarker as inclusive (they return the
+// marker key itself) rather than exclusive like AWS. listRange must still
+// enforce the half-open (lo, hi] lower bound itself, so a boundary key is never
+// double-counted across adjacent ranges on such a backend.
+func TestListRange_LowerBoundExcludesMarkerKey(t *testing.T) {
+	data := []fakeObj{
+		{key: "k", version: "v1", size: 10},               // boundary key (version)
+		{key: "k", version: "vd", size: 0, isDelete: true}, // boundary key (delete marker)
+		{key: "z", version: "v1", size: 2},
+	}
+	client := &fakeS3{objs: data, pageSize: 10, inclusiveMarker: true}
+
+	// Range (k, ""]: even though the backend returns "k", it must be excluded.
+	sc, dm, err := listRange(context.Background(), client, "bucket", "k", "")
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), sc["STANDARD"].CurrentObjectNumber, "boundary key 'k' excluded; only 'z' counted")
+	assert.Equal(t, float64(2), sc["STANDARD"].CurrentSize)
+	assert.Equal(t, float64(0), dm, "boundary key 'k' delete marker excluded")
 }
