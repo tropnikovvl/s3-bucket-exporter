@@ -1,0 +1,19 @@
+[project]
+name = "s3-bucket-exporter-e2e"
+version = "0.0.0"
+description = "End-to-end tests for s3-bucket-exporter"
+requires-python = ">=3.13"
+dependencies = [
+    "boto3==1.43.36",
+    "prometheus-client==0.25.0",
+    "pytest==9.1.1",
+    "requests==2.34.2",
+]
+
+[tool.uv]
+# Test-only project: install the dependencies, not the project itself.
+package = false
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"

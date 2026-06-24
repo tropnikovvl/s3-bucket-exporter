@@ -1,4 +1,0 @@
-requests==2.33.0
-pytest==9.0.3
-boto3==1.36.5
-prometheus-client==0.21.1
