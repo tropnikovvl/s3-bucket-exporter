@@ -1,13 +1,15 @@
 name: go-test
 
 on:
-  push:
-    branches:
-      - master
-      - develop
-      - "dependabot/*"
   pull_request:
     types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
