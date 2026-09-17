@@ -148,7 +148,8 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 			customTransport.MaxIdleConnsPerHost = a.cfg.MaxIdleConns
 		}
 		if a.cfg.SkipTLSVerify {
-			customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user opt-in via S3_SKIP_TLS_VERIFY
+			// #nosec G402 -- user opt-in via S3_SKIP_TLS_VERIFY
+			customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 			log.Debug("TLS verification is disabled")
 		}
 		options = append(options, config.WithHTTPClient(&http.Client{
