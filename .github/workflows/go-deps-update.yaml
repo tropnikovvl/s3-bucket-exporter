@@ -9,13 +9,12 @@ concurrency:
   group: go-deps-update
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   open-update-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -32,18 +31,26 @@ jobs:
         id: update
         run: |
           go list -m -f '{{.Path}} {{.Version}}' all > /tmp/deps-before.txt
-          go get -u ./...
-          go mod tidy
+          make deps-update
           if git diff --quiet -- go.mod go.sum; then
             echo "No dependency updates available."
             echo "updated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "updated=true" >> "$GITHUB_OUTPUT"
           go list -m -f '{{.Path}} {{.Version}}' all > /tmp/deps-after.txt
           awk 'NR==FNR { old[$1] = $2; next }
-               old[$1] != $2 { printf "- `%s` %s -> %s\n", $1, (old[$1] == "" ? "(new)" : old[$1]), $2 }' \
+               { seen[$1] = 1 }
+               old[$1] != $2 { printf "- `%s` %s -> %s\n", $1, (old[$1] == "" ? "(new)" : old[$1]), $2 }
+               END { for (path in old) if (!(path in seen)) printf "- `%s` %s -> (removed)\n", path, old[path] }' \
             /tmp/deps-before.txt /tmp/deps-after.txt > /tmp/deps-changelog.txt
+          if [ ! -s /tmp/deps-changelog.txt ]; then
+            # go mod tidy can rewrite go.sum hashes or indirect markers without
+            # moving a single module version. Nothing to release.
+            echo "go.mod/go.sum changed but no module version moved."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "updated=true" >> "$GITHUB_OUTPUT"
           cat /tmp/deps-changelog.txt
 
       - name: Bump patch version

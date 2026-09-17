@@ -4,8 +4,7 @@ on:
   pull_request:
     types: [closed]
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   tag:
@@ -14,6 +13,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'chore/deps-update-')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out merge commit
         uses: actions/checkout@v7
