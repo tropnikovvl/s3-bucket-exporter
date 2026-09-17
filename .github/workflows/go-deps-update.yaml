@@ -1,0 +1,125 @@
+name: Weekly Go dependency update
+
+on:
+  schedule:
+    - cron: '0 6 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: go-deps-update
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  open-update-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Setup Golang with cache
+        uses: magnetikonline/action-golang-cache@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Update Go dependencies
+        id: update
+        run: |
+          go list -m -f '{{.Path}} {{.Version}}' all > /tmp/deps-before.txt
+          make deps-update
+          if git diff --quiet -- go.mod go.sum; then
+            echo "No dependency updates available."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          go list -m -f '{{.Path}} {{.Version}}' all > /tmp/deps-after.txt
+          awk 'NR==FNR { old[$1] = $2; next }
+               { seen[$1] = 1 }
+               old[$1] != $2 { printf "- `%s` %s -> %s\n", $1, (old[$1] == "" ? "(new)" : old[$1]), $2 }
+               END { for (path in old) if (!(path in seen)) printf "- `%s` %s -> (removed)\n", path, old[path] }' \
+            /tmp/deps-before.txt /tmp/deps-after.txt > /tmp/deps-changelog.txt
+          if [ ! -s /tmp/deps-changelog.txt ]; then
+            # go mod tidy can rewrite go.sum hashes or indirect markers without
+            # moving a single module version. Nothing to release.
+            echo "go.mod/go.sum changed but no module version moved."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          cat /tmp/deps-changelog.txt
+
+      - name: Bump patch version
+        id: version
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          chart=deployments/helm/Chart.yaml
+          current=$(awk '/^version:/ { print $2; exit }' "$chart")
+          if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Unexpected chart version format: '$current'"
+            exit 1
+          fi
+          new="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$(( BASH_REMATCH[3] + 1 ))"
+          sed -i -E "s/^version: .*/version: ${new}/" "$chart"
+          sed -i -E "s/^appVersion: .*/appVersion: \"${new}\"/" "$chart"
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+          echo "Preparing release ${current} -> ${new}"
+
+      - name: Push update branch
+        id: branch
+        if: steps.update.outputs.updated == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          branch="chore/deps-update-${VERSION}"
+          echo "name=${branch}" >> "$GITHUB_OUTPUT"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add go.mod go.sum deployments/helm/Chart.yaml
+          {
+            echo "chore(deps): weekly go dependency update, release ${VERSION}"
+            echo
+            cat /tmp/deps-changelog.txt
+          } > /tmp/commit-message.txt
+          git commit -F /tmp/commit-message.txt
+          # Force push: an earlier run may have left this branch behind with a
+          # still-open pull request. Rebuilding it from current master is the
+          # intended behaviour.
+          git push --force origin "HEAD:refs/heads/${branch}"
+
+      - name: Open pull request and enable auto-merge
+        if: steps.update.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          {
+            echo "Automated weekly \`go get -u ./...\` + \`go mod tidy\`."
+            echo
+            echo "Updated modules:"
+            echo
+            cat /tmp/deps-changelog.txt
+            echo
+            echo "Chart version bumped to \`${VERSION}\`. Once all checks pass this"
+            echo "pull request is merged automatically and tag \`${VERSION}\` is pushed,"
+            echo "which triggers the binary and image publish workflows."
+          } > /tmp/pr-body.md
+
+          pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "Reusing open pull request #${pr}"
+          else
+            pr=$(gh pr create \
+              --base master \
+              --head "$BRANCH" \
+              --title "chore(deps): weekly go dependency update, release ${VERSION}" \
+              --body-file /tmp/pr-body.md)
+            echo "Opened ${pr}"
+          fi
+          gh pr merge "$pr" --auto --squash --delete-branch

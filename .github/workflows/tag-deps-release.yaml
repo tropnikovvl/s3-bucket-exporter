@@ -1,0 +1,40 @@
+name: Tag patch release after dependency update
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  tag:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'chore/deps-update-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out merge commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Tag patch release
+        run: |
+          version=$(awk '/^version:/ { print $2; exit }' deployments/helm/Chart.yaml)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected chart version format: '$version'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${version}" >/dev/null 2>&1; then
+            echo "Tag ${version} already exists, nothing to do."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$version" -m "Release ${version}"
+          git push origin "$version"
+          echo "Pushed tag ${version}"

@@ -24,3 +24,6 @@ go.work
 
 __pycache__
 bin
+
+.venv
+.pytest_cache
