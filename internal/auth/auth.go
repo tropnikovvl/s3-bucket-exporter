@@ -1,10 +1,14 @@
 package auth
 
 const (
-	AuthMethodIAM   = "iam"
-	AuthMethodKeys  = "keys"
-	AuthMethodRole  = "role"
-	AuthMethodWebID = "webid"
+	// AuthMethodIAM uses the default credential chain of the AWS SDK. The chain
+	// covers IRSA (AWS_WEB_IDENTITY_TOKEN_FILE with AWS_ROLE_ARN), EKS Pod
+	// Identity and ECS task roles (container credentials provider),
+	// ~/.aws/config profiles with role_arn and EC2 IMDS.
+	AuthMethodIAM = "iam"
+	// AuthMethodKeys uses static credentials from S3_ACCESS_KEY and
+	// S3_SECRET_KEY.
+	AuthMethodKeys = "keys"
 )
 
 type AuthConfig struct {
@@ -13,8 +17,6 @@ type AuthConfig struct {
 	Endpoint      string
 	AccessKey     string
 	SecretKey     string
-	RoleARN       string
-	WebIdentity   string
 	SkipTLSVerify bool
 	MaxIdleConns  int
 }
@@ -25,14 +27,8 @@ func DetectAuthMethod(cfg AuthConfig) string {
 		return cfg.Method
 	}
 
-	switch {
-	case cfg.WebIdentity != "" && cfg.RoleARN != "":
-		return AuthMethodWebID
-	case cfg.RoleARN != "":
-		return AuthMethodRole
-	case cfg.AccessKey != "" && cfg.SecretKey != "":
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
 		return AuthMethodKeys
-	default:
-		return AuthMethodIAM
 	}
+	return AuthMethodIAM
 }

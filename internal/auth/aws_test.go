@@ -360,3 +360,106 @@ func TestCachedAWSAuth_GetConfig_DoubleCheckLocking(t *testing.T) {
 	finalCallCount := mockLoader.getCallCount()
 	assert.Equal(t, firstCallCount+1, finalCallCount, "Double-check locking should prevent multiple refreshes")
 }
+
+func TestGetConfig_ReusesTransportAcrossCalls(t *testing.T) {
+	a := NewAWSAuth(AuthConfig{
+		Region:       "us-east-1",
+		Method:       AuthMethodKeys,
+		AccessKey:    "k",
+		SecretKey:    "s",
+		MaxIdleConns: 25,
+	})
+
+	var first *http.Transport
+	for i := range 5 {
+		cfg, err := a.GetConfig(context.Background())
+		require.NoError(t, err)
+
+		hc, ok := cfg.HTTPClient.(*http.Client)
+		require.True(t, ok, "expected a *http.Client")
+		tr, ok := hc.Transport.(*http.Transport)
+		require.True(t, ok, "expected a *http.Transport")
+
+		if i == 0 {
+			first = tr
+			continue
+		}
+		assert.Same(t, first, tr, "every refresh must reuse the warm connection pool")
+	}
+}
+
+func TestNewAWSAuth_NoCustomHTTPClientByDefault(t *testing.T) {
+	a := NewAWSAuth(AuthConfig{
+		Region:    "us-east-1",
+		Method:    AuthMethodKeys,
+		AccessKey: "k",
+		SecretKey: "s",
+	})
+
+	assert.Nil(t, a.httpClient, "defaults need no custom client")
+
+	_, err := a.GetConfig(context.Background())
+	require.NoError(t, err)
+}
+
+// TestCachedAWSAuth_RefreshReusesTransport makes sure that a credential
+// refresh does not make a new transport. It tests the refresh cycle in
+// CachedAWSAuth, not a bare AWSAuth. The credentials expire
+// sooner than refreshBuffer. Therefore isCacheValid is always false and every
+// call takes the refresh branch.
+func TestCachedAWSAuth_RefreshReusesTransport(t *testing.T) {
+	var mu sync.Mutex
+	var seen []*http.Client
+
+	mockLoader := &mockConfigLoader{
+		loadFunc: func(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
+			// Apply the options as the real loader does, to see which HTTP
+			// client GetConfig supplied on this refresh.
+			var lo config.LoadOptions
+			for _, fn := range optFns {
+				require.NoError(t, fn(&lo))
+			}
+			mu.Lock()
+			hc, ok := lo.HTTPClient.(*http.Client)
+			require.True(t, ok, "GetConfig must pass a *http.Client when MaxIdleConns is set")
+			seen = append(seen, hc)
+			mu.Unlock()
+
+			return aws.Config{
+				Region: "us-east-1",
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{
+						AccessKeyID: "k", SecretAccessKey: "s",
+						CanExpire: true,
+						// Less than refreshBuffer (5m), so the cache never holds.
+						Expires: time.Now().Add(time.Minute),
+					}, nil
+				}),
+			}, nil
+		},
+	}
+
+	cachedAuth := NewCachedAWSAuth(AuthConfig{
+		Region:       "us-east-1",
+		Method:       AuthMethodIAM,
+		MaxIdleConns: 25,
+	})
+	cachedAuth.loader = mockLoader.Load
+
+	for range 5 {
+		_, err := cachedAuth.GetConfig(context.Background())
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, 5, mockLoader.getCallCount(), "every call must take the refresh path")
+	require.Len(t, seen, 5)
+
+	for i, hc := range seen[1:] {
+		assert.Same(t, seen[0], hc, "refresh %d built a new HTTP client", i+2)
+		assert.Same(t, seen[0].Transport, hc.Transport, "refresh %d built a new transport", i+2)
+	}
+
+	tr, ok := seen[0].Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, 25, tr.MaxIdleConns, "the shared transport keeps its pool sizing")
+}

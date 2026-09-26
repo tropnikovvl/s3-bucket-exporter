@@ -13,22 +13,16 @@ func TestDetectAuthMethod(t *testing.T) {
 		expectedMethod string
 	}{
 		{
-			name: "Detect WebIdentity",
+			name: "explicit method wins",
 			config: AuthConfig{
-				WebIdentity: "/path/to/token",
-				RoleARN:     "arn:aws:iam::123456789012:role/test-role",
+				Method:    AuthMethodIAM,
+				AccessKey: "test-key",
+				SecretKey: "test-secret",
 			},
-			expectedMethod: AuthMethodWebID,
+			expectedMethod: AuthMethodIAM,
 		},
 		{
-			name: "Detect Role",
-			config: AuthConfig{
-				RoleARN: "arn:aws:iam::123456789012:role/test-role",
-			},
-			expectedMethod: AuthMethodRole,
-		},
-		{
-			name: "Detect Keys",
+			name: "detect keys when both are set",
 			config: AuthConfig{
 				AccessKey: "test-key",
 				SecretKey: "test-secret",
@@ -36,7 +30,21 @@ func TestDetectAuthMethod(t *testing.T) {
 			expectedMethod: AuthMethodKeys,
 		},
 		{
-			name:           "Default to IAM",
+			name: "access key alone falls back to the default chain",
+			config: AuthConfig{
+				AccessKey: "test-key",
+			},
+			expectedMethod: AuthMethodIAM,
+		},
+		{
+			name: "secret key alone falls back to the default chain",
+			config: AuthConfig{
+				SecretKey: "test-secret",
+			},
+			expectedMethod: AuthMethodIAM,
+		},
+		{
+			name:           "default to the credential chain",
 			config:         AuthConfig{},
 			expectedMethod: AuthMethodIAM,
 		},
