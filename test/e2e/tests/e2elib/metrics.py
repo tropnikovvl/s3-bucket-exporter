@@ -54,4 +54,6 @@ def parse_metrics(text: str) -> dict:
                 out["endpoint_up"] = value
             elif name == "s3_bucket_count":
                 out["bucket_count"] = value
+            elif name == "s3_auth_attempts_total":
+                out.setdefault("auth_attempts", {})[(labels["method"], labels["status"])] = value
     return out

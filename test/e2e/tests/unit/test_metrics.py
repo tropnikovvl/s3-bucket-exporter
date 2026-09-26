@@ -38,3 +38,12 @@ def test_parse_metrics_shape():
 def test_parse_metrics_ignores_unrelated():
     m = parse_metrics("# HELP x foo\n# TYPE x gauge\nx 1\n")
     assert m == {}
+
+
+def test_parse_metrics_auth_attempts():
+    m = parse_metrics(
+        "# TYPE s3_auth_attempts_total counter\n"
+        's3_auth_attempts_total{method="iam",status="success",s3Endpoint="e"} 2\n'
+        's3_auth_attempts_total{method="keys",status="error",s3Endpoint="e"} 1\n'
+    )
+    assert m["auth_attempts"] == {("iam", "success"): 2, ("keys", "error"): 1}
