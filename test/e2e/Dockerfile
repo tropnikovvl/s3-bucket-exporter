@@ -13,4 +13,6 @@ COPY tests/ ./tests/
 
 ENV TEST_PROFILE=short
 
-CMD uv run --frozen pytest -v /app/tests/test_${TEST_PROFILE}_running_e2e.py
+# The IAM module runs last: it adds a bucket, and the profile test compares
+# exporter totals against the whole S3 state.
+CMD uv run --frozen pytest -v /app/tests/test_${TEST_PROFILE}_running_e2e.py /app/tests/test_iam_e2e.py
