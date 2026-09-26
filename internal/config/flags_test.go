@@ -62,46 +62,124 @@ func TestEnvBool(t *testing.T) {
 		key      string
 		defValue bool
 		envValue string
+		setEnv   bool
 		expValue bool
+		expErr   string
 	}{
 		{
 			name:     "returns default when env not set",
 			key:      "TEST_BOOL_1",
 			defValue: false,
-			envValue: "",
+			setEnv:   false,
 			expValue: false,
 		},
 		{
-			name:     "returns true when env is 'true'",
+			name:     "returns default when env is empty",
 			key:      "TEST_BOOL_2",
-			defValue: false,
-			envValue: "true",
+			defValue: true,
+			envValue: "",
+			setEnv:   true,
 			expValue: true,
 		},
 		{
-			name:     "returns default for invalid value",
+			name:     "returns true when env is 'true'",
 			key:      "TEST_BOOL_3",
-			defValue: true,
-			envValue: "invalid",
+			defValue: false,
+			envValue: "true",
+			setEnv:   true,
 			expValue: true,
+		},
+		{
+			name:     "records an error and keeps the default for an invalid value",
+			key:      "TEST_BOOL_4",
+			defValue: true,
+			envValue: "yes",
+			setEnv:   true,
+			expValue: true,
+			expErr:   "invalid value for TEST_BOOL_4: 'yes' is not a boolean",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.envValue != "" {
-				err := os.Setenv(tt.key, tt.envValue)
-				if err != nil {
-					t.Fatalf("failed to set environment variable: %v", err)
-				}
-				defer func() {
-					if err := os.Unsetenv(tt.key); err != nil {
-						t.Errorf("failed to unset environment variable: %v", err)
-					}
-				}()
+			if tt.setEnv {
+				t.Setenv(tt.key, tt.envValue)
 			}
-			got := envBool(tt.key, tt.defValue)
+
+			var errs []string
+			got := envBool(tt.key, tt.defValue, &errs)
+
 			assert.Equal(t, tt.expValue, got)
+			if tt.expErr == "" {
+				assert.Empty(t, errs)
+			} else {
+				require.Len(t, errs, 1)
+				assert.Equal(t, tt.expErr, errs[0])
+			}
+		})
+	}
+}
+
+func TestEnvInt(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		defValue int
+		envValue string
+		setEnv   bool
+		expValue int
+		expErr   string
+	}{
+		{
+			name:     "returns default when env not set",
+			key:      "TEST_INT_1",
+			defValue: 25,
+			setEnv:   false,
+			expValue: 25,
+		},
+		{
+			name:     "returns default when env is empty",
+			key:      "TEST_INT_2",
+			defValue: 25,
+			envValue: "",
+			setEnv:   true,
+			expValue: 25,
+		},
+		{
+			name:     "returns parsed value",
+			key:      "TEST_INT_3",
+			defValue: 25,
+			envValue: "50",
+			setEnv:   true,
+			expValue: 50,
+		},
+		{
+			name:     "records an error and keeps the default for an invalid value",
+			key:      "TEST_INT_4",
+			defValue: 25,
+			envValue: "fifty",
+			setEnv:   true,
+			expValue: 25,
+			expErr:   "invalid value for TEST_INT_4: 'fifty' is not an integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setEnv {
+				t.Setenv(tt.key, tt.envValue)
+			}
+
+			var errs []string
+			got := envInt(tt.key, tt.defValue, &errs)
+
+			assert.Equal(t, tt.expValue, got)
+			if tt.expErr == "" {
+				assert.Empty(t, errs)
+			} else {
+				require.Len(t, errs, 1)
+				assert.Equal(t, tt.expErr, errs[0])
+			}
 		})
 	}
 }
@@ -539,4 +617,25 @@ func TestSetupLogger_JSONFormatterOutput(t *testing.T) {
 	assert.Contains(t, output, `"msg":"test message with fields"`)
 	assert.Contains(t, output, `"key1":"value1"`)
 	assert.Contains(t, output, `"key2":123`)
+}
+
+func TestValidate_ReportsEnvParseErrors(t *testing.T) {
+	oldCommandLine := flag.CommandLine
+	defer func() { flag.CommandLine = oldCommandLine }()
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+
+	t.Setenv("S3_MAX_CONCURRENCY", "fifty")
+	t.Setenv("S3_SKIP_TLS_VERIFY", "yes")
+
+	cfg := InitFlags()
+	require.NoError(t, flag.CommandLine.Parse([]string{}))
+
+	// The defaults still apply, so nothing else in Validate trips up.
+	assert.Equal(t, 25, cfg.S3MaxConcurrency)
+	assert.False(t, cfg.S3SkipTLSVerify)
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid value for S3_MAX_CONCURRENCY: 'fifty' is not an integer")
+	assert.Contains(t, err.Error(), "invalid value for S3_SKIP_TLS_VERIFY: 'yes' is not a boolean")
 }

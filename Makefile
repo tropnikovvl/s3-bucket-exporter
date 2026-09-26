@@ -311,13 +311,13 @@ docker-run:
 docker-compose-up: ## Start services with docker-compose
 docker-compose-up:
 	@echo "$(GREEN)Starting docker-compose services...$(NC)"
-	docker-compose -f deployments/docker-compose/docker-compose.yml up -d
+	docker-compose -f deployments/docker-compose/docker-compose.yaml up -d
 	@echo "$(GREEN)✓ Services started$(NC)"
 
 docker-compose-down: ## Stop services with docker-compose
 docker-compose-down:
 	@echo "$(YELLOW)Stopping docker-compose services...$(NC)"
-	docker-compose -f deployments/docker-compose/docker-compose.yml down
+	docker-compose -f deployments/docker-compose/docker-compose.yaml down
 	@echo "$(GREEN)✓ Services stopped$(NC)"
 
 ##@ Kubernetes/Helm

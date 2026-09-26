@@ -12,15 +12,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 )
 
 type AWSAuth struct {
-	cfg    AuthConfig
-	loader func(context.Context, ...func(*config.LoadOptions) error) (aws.Config, error)
+	cfg AuthConfig
+	// httpClient exists once and every credential refresh shares it. A new
+	// transport for each refresh discards the warm keep-alive pool. The next
+	// scrape then makes up to MaxIdleConns TLS handshakes again.
+	httpClient *http.Client
+	loader     func(context.Context, ...func(*config.LoadOptions) error) (aws.Config, error)
 }
 
 // CachedAWSAuth provides cached authentication with refresh-based logic
@@ -34,9 +36,40 @@ type CachedAWSAuth struct {
 
 func NewAWSAuth(cfg AuthConfig) *AWSAuth {
 	return &AWSAuth{
-		cfg:    cfg,
-		loader: config.LoadDefaultConfig,
+		cfg:        cfg,
+		httpClient: buildHTTPClient(cfg),
+		loader:     config.LoadDefaultConfig,
 	}
+}
+
+// buildHTTPClient returns a client with a pool as large as the LIST
+// concurrency budget. It returns nil when the SDK defaults are sufficient:
+// without a custom client, the SDK uses its own client with the timeouts of
+// the defaults mode. A nil result means "do not pass config.WithHTTPClient".
+func buildHTTPClient(cfg AuthConfig) *http.Client {
+	if !cfg.SkipTLSVerify && cfg.MaxIdleConns <= 0 {
+		return nil
+	}
+
+	baseTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		baseTransport = &http.Transport{}
+	}
+	customTransport := baseTransport.Clone()
+
+	if cfg.MaxIdleConns > 0 {
+		// Size the connection pool to the LIST concurrency budget so parallel
+		// listing reuses keep-alive connections instead of churning TLS handshakes.
+		customTransport.MaxIdleConns = cfg.MaxIdleConns
+		customTransport.MaxIdleConnsPerHost = cfg.MaxIdleConns
+	}
+	if cfg.SkipTLSVerify {
+		// #nosec G402 -- user opt-in via S3_SKIP_TLS_VERIFY
+		customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+		log.Debug("TLS verification is disabled")
+	}
+
+	return &http.Client{Transport: customTransport}
 }
 
 // NewCachedAWSAuth creates a new cached AWS authentication manager
@@ -79,10 +112,10 @@ func (c *CachedAWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		return aws.Config{}, err
 	}
 
-	// Resolve credentials eagerly so the cache expiry reflects their real
-	// lifetime. Only populate the cache once retrieval succeeds, otherwise a
-	// transient failure would poison the cache (a non-nil config with a zero
-	// expiry reads as "valid forever" and the loader would never retry).
+	// Retrieve the credentials now, so that the cache expiry matches their real
+	// lifetime. Fill the cache only after a successful retrieval. A transient
+	// failure otherwise poisons the cache. A non-nil config with a zero expiry
+	// reads as "valid forever", and the loader then never retries.
 	creds, err := newConfig.Credentials.Retrieve(ctx)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("failed to retrieve credentials: %w", err)
@@ -135,26 +168,8 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 		})
 	}
 
-	if a.cfg.SkipTLSVerify || a.cfg.MaxIdleConns > 0 {
-		baseTransport, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			baseTransport = &http.Transport{}
-		}
-		customTransport := baseTransport.Clone()
-		if a.cfg.MaxIdleConns > 0 {
-			// Size the connection pool to the LIST concurrency budget so parallel
-			// listing reuses keep-alive connections instead of churning TLS handshakes.
-			customTransport.MaxIdleConns = a.cfg.MaxIdleConns
-			customTransport.MaxIdleConnsPerHost = a.cfg.MaxIdleConns
-		}
-		if a.cfg.SkipTLSVerify {
-			// #nosec G402 -- user opt-in via S3_SKIP_TLS_VERIFY
-			customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
-			log.Debug("TLS verification is disabled")
-		}
-		options = append(options, config.WithHTTPClient(&http.Client{
-			Transport: customTransport,
-		}))
+	if a.httpClient != nil {
+		options = append(options, config.WithHTTPClient(a.httpClient))
 	}
 
 	switch a.cfg.Method {
@@ -163,30 +178,8 @@ func (a *AWSAuth) GetConfig(ctx context.Context) (aws.Config, error) {
 			credentials.NewStaticCredentialsProvider(a.cfg.AccessKey, a.cfg.SecretKey, ""),
 		))
 
-	case AuthMethodRole:
-		baseConfig, err := a.loader(ctx, options...)
-		if err != nil {
-			status = "error"
-			return aws.Config{}, fmt.Errorf("failed to load base AWS config: %w", err)
-		}
-
-		options = append(options, config.WithCredentialsProvider(
-			stscreds.NewAssumeRoleProvider(
-				sts.NewFromConfig(baseConfig),
-				a.cfg.RoleARN,
-			),
-		))
-
-	case AuthMethodWebID:
-		options = append(options, config.WithWebIdentityRoleCredentialOptions(
-			func(o *stscreds.WebIdentityRoleOptions) {
-				o.RoleARN = a.cfg.RoleARN
-				o.TokenRetriever = stscreds.IdentityTokenFile(a.cfg.WebIdentity)
-			},
-		))
-
 	case AuthMethodIAM:
-		log.Debug("Using IAM role authentication")
+		log.Debug("Using the default AWS credential chain")
 
 	default:
 		status = "error"

@@ -28,6 +28,10 @@ type Config struct {
 	S3MaxConcurrency int
 
 	ScrapeIntervalDuration time.Duration
+
+	// parseErrs holds the environment variables that did not parse.
+	// Validate turns them into a configuration error.
+	parseErrs []string
 }
 
 func InitFlags() *Config {
@@ -41,9 +45,9 @@ func InitFlags() *Config {
 	flag.StringVar(&cfg.S3AccessKey, "s3_access_key", envString("S3_ACCESS_KEY", ""), "S3 access key")
 	flag.StringVar(&cfg.S3SecretKey, "s3_secret_key", envString("S3_SECRET_KEY", ""), "S3 secret key")
 	flag.StringVar(&cfg.S3Region, "s3_region", envString("S3_REGION", "us-east-1"), "S3 region")
-	flag.BoolVar(&cfg.S3ForcePathStyle, "s3_force_path_style", envBool("S3_FORCE_PATH_STYLE", false), "Use path-style S3 URLs")
-	flag.BoolVar(&cfg.S3SkipTLSVerify, "s3_skip_tls_verify", envBool("S3_SKIP_TLS_VERIFY", false), "Skip TLS verification for S3 connections")
-	flag.IntVar(&cfg.S3MaxConcurrency, "s3_max_concurrency", envInt("S3_MAX_CONCURRENCY", 25), "Maximum number of concurrent S3 LIST operations")
+	flag.BoolVar(&cfg.S3ForcePathStyle, "s3_force_path_style", envBool("S3_FORCE_PATH_STYLE", false, &cfg.parseErrs), "Use path-style S3 URLs")
+	flag.BoolVar(&cfg.S3SkipTLSVerify, "s3_skip_tls_verify", envBool("S3_SKIP_TLS_VERIFY", false, &cfg.parseErrs), "Skip TLS verification for S3 connections")
+	flag.IntVar(&cfg.S3MaxConcurrency, "s3_max_concurrency", envInt("S3_MAX_CONCURRENCY", 25, &cfg.parseErrs), "Maximum number of concurrent S3 LIST operations")
 	return cfg
 }
 
@@ -54,17 +58,33 @@ func envString(key string, def string) string {
 	return def
 }
 
-func envBool(key string, def bool) bool {
-	x, err := strconv.ParseBool(os.Getenv(key))
+// envBool reads a boolean environment variable. An unset or empty variable
+// gives def and no error. A value that does not parse gives def and records an
+// error, so that Validate can reject the configuration.
+func envBool(key string, def bool, errs *[]string) bool {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+
+	x, err := strconv.ParseBool(raw)
 	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("invalid value for %s: '%s' is not a boolean", key, raw))
 		return def
 	}
 	return x
 }
 
-func envInt(key string, def int) int {
-	x, err := strconv.Atoi(os.Getenv(key))
+// envInt reads an integer environment variable. See envBool for the contract.
+func envInt(key string, def int, errs *[]string) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+
+	x, err := strconv.Atoi(raw)
 	if err != nil {
+		*errs = append(*errs, fmt.Sprintf("invalid value for %s: '%s' is not an integer", key, raw))
 		return def
 	}
 	return x
@@ -72,6 +92,10 @@ func envInt(key string, def int) int {
 
 func (c *Config) Validate() error {
 	var errs []string
+
+	// Parse failures come first. They explain why a later check reports a
+	// default value.
+	errs = append(errs, c.parseErrs...)
 
 	if d, err := time.ParseDuration(c.ScrapeInterval); err != nil {
 		errs = append(errs, fmt.Sprintf("invalid scrape interval '%s': %v", c.ScrapeInterval, err))

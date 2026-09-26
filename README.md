@@ -23,7 +23,7 @@ Endpoint-level metrics:
   - `s3_total_object_number{versionStatus="current|noncurrent"}` — total object count across all buckets, by storage class and version status
   - `s3_total_delete_markers` — total delete marker count across all buckets
   - `s3_list_total_duration_seconds` — total time spent listing all buckets
-  - `s3_auth_attempts_total` — authentication attempts by method and status
+  - `s3_auth_attempts_total{method="keys|iam",status="success|error"}` — authentication attempts by method and status
 
 Bucket-level metrics:
   - `s3_bucket_size{versionStatus="current|noncurrent"}` — size per bucket, storage class, and version status
@@ -68,7 +68,7 @@ docker run -p 9655:9655 -d \
   -s3_region=us-east-1
 ```
 
-> Note: For AWS, all buckets must be in the same region to avoid "BucketRegionError" errors or manually limit the list of buckets. An example of IAM policy can be found [here](./deploy/aws/iam-policy.json)
+> Note: For AWS, all buckets must be in the same region to avoid "BucketRegionError" errors or manually limit the list of buckets. An example of IAM policy can be found [here](./deployments/aws/iam-policy.json)
 
 ### Helm Example
 
@@ -117,10 +117,30 @@ The exporter automatically detects the authentication method based on the provid
 
 | Method | When used | Cache TTL |
 |--------|-----------|-----------|
-| **Access Keys** | `S3_ACCESS_KEY` + `S3_SECRET_KEY` set | Never expires |
-| **IAM Role** (assume role) | `S3_ROLE_ARN` set | Until credential expiry (from STS) |
-| **Web Identity** | `S3_ROLE_ARN` + `S3_WEB_IDENTITY` set | Until credential expiry (from STS) |
-| **IAM Instance Profile** | No credentials provided | Until credential expiry |
+| **Access Keys** | `S3_ACCESS_KEY` and `S3_SECRET_KEY` are both set | Never expires |
+| **Default credential chain** | No static keys provided | Until credential expiry |
+
+The default chain is `LoadDefaultConfig` from the AWS SDK. The exporter adds
+nothing to it. The chain covers:
+
+- **IRSA** — `AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`. The EKS pod
+  identity webhook injects both variables. IRSA therefore works by default,
+  with no configuration in the exporter.
+- **EKS Pod Identity** — the container credentials provider
+  (`AWS_CONTAINER_CREDENTIALS_FULL_URI` with
+  `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`). The EKS Pod Identity Agent injects
+  both variables.
+- **Assume role from a profile** — a profile in `~/.aws/config` with `role_arn`
+  and either `source_profile` or `credential_source`.
+- **Web identity from a profile** — a profile with `web_identity_token_file`.
+- **ECS task role** — the container credentials provider, as for EKS Pod
+  Identity.
+- **EC2 instance metadata (IMDS)**.
+
+> Note: the SDK does not use `AWS_ROLE_ARN` alone, without
+> `AWS_WEB_IDENTITY_TOKEN_FILE`. A role on top of IMDS or IRSA credentials needs
+> a `~/.aws/config` profile. The distroless image does not contain that file,
+> so the deployment must mount it into the container.
 
 ### Security Features
 
