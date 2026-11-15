@@ -26,5 +26,7 @@ jobs:
 
       - name: Run Gosec Security Scanner
         uses: securego/gosec@v2.30.0
+        env:
+          GOTOOLCHAIN: auto
         with:
           args: -exclude-dir=\.*test\.* ./...
