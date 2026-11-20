@@ -79,13 +79,7 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	authCfg := auth.AuthConfig{
-		Region:    *region,
-		Endpoint:  *endpoint,
-		AccessKey: *accessKey,
-		SecretKey: *secretKey,
-	}
-	authCfg.Method = auth.DetectAuthMethod(authCfg)
+	authCfg := benchAuthConfig(*region, *endpoint, *accessKey, *secretKey, *concurrency)
 	awsCfg, err := auth.NewAWSAuth(authCfg).GetConfig(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to configure AWS auth: %v\n", err)
@@ -129,6 +123,22 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// benchAuthConfig builds the auth config the same way the exporter does
+// (cmd/s3-bucket-exporter/main.go): the idle connection pool is sized to the
+// LIST concurrency, so parallel listing reuses keep-alive connections instead
+// of re-dialing past the SDK default of 10 per host.
+func benchAuthConfig(region, endpoint, accessKey, secretKey string, concurrency int) auth.AuthConfig {
+	cfg := auth.AuthConfig{
+		Region:       region,
+		Endpoint:     endpoint,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		MaxIdleConns: concurrency,
+	}
+	cfg.Method = auth.DetectAuthMethod(cfg)
+	return cfg
 }
 
 func flagSet(name string) bool {
