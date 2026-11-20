@@ -59,7 +59,8 @@ EXPECTED_STATE = {
 
 class TestS3BucketExporter:
     @pytest.fixture(scope="class")
-    def populate_s3(self, s3_client):
+    @classmethod
+    def populate_s3(cls, s3_client):
         """Create plain + versioned buckets and the fixed object scenario."""
         for bucket in PLAIN_BUCKETS:
             s3_client.create_bucket(Bucket=bucket)

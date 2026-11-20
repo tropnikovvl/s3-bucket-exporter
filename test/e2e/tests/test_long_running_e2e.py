@@ -42,7 +42,8 @@ class TestLongRunningE2E:
     STORAGE_CLASSES = ["STANDARD", "GLACIER", "STANDARD_IA"]
 
     @pytest.fixture(scope="class")
-    def test_buckets(self, s3_client):
+    @classmethod
+    def test_buckets(cls, s3_client):
         """Create test buckets for the long-running test, including versioned ones."""
         plain_buckets = [
             "long-test-bucket-1",

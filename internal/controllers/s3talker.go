@@ -15,6 +15,8 @@ import (
 type S3ClientInterface interface {
 	ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
 	ListObjectVersions(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	GetBucketVersioning(ctx context.Context, params *s3.GetBucketVersioningInput, optFns ...func(*s3.Options)) (*s3.GetBucketVersioningOutput, error)
 }
 
 // distinct removes duplicates and blank entries from a slice of strings
@@ -128,7 +130,14 @@ const discoverCandidateFactor = 4
 func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3ClientInterface, shards int) (map[string]StorageClassMetrics, float64, time.Duration, error) {
 	start := time.Now()
 
-	raw, err := discoverBoundaries(ctx, s3Client, bucketName, shards*discoverCandidateFactor, discoverMaxDepth)
+	mode, err := detectListMode(ctx, s3Client, bucketName)
+	if err != nil {
+		log.Warnf("Versioning detection aborted for bucket %s: scrape deadline exceeded", bucketName)
+		return nil, 0, 0, err
+	}
+	log.Debugf("Bucket %s: listing via %s", bucketName, mode)
+
+	raw, err := discoverBoundaries(ctx, s3Client, bucketName, shards*discoverCandidateFactor, discoverMaxDepth, mode)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			log.Warnf("Discovery aborted for bucket %s: scrape deadline exceeded", bucketName)
@@ -151,7 +160,7 @@ func calculateBucketMetrics(ctx context.Context, bucketName string, s3Client S3C
 	g, gctx := errgroup.WithContext(ctx)
 	for i := range los {
 		g.Go(func() error {
-			sc, dm, e := listRange(gctx, s3Client, bucketName, los[i], his[i])
+			sc, dm, e := listRange(gctx, s3Client, bucketName, los[i], his[i], mode)
 			if e != nil {
 				return e
 			}

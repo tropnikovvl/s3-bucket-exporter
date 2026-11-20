@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -20,6 +21,25 @@ import (
 type mockS3Client struct {
 	listBucketsFunc        func(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
 	listObjectVersionsFunc func(ctx context.Context, params *s3.ListObjectVersionsInput, optFns ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error)
+
+	getBucketVersioningFunc func(ctx context.Context, params *s3.GetBucketVersioningInput, optFns ...func(*s3.Options)) (*s3.GetBucketVersioningOutput, error)
+	listObjectsV2Func       func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+}
+
+// GetBucketVersioning defaults to Enabled so tests that only mock
+// ListObjectVersions keep using that path.
+func (m *mockS3Client) GetBucketVersioning(ctx context.Context, params *s3.GetBucketVersioningInput, optFns ...func(*s3.Options)) (*s3.GetBucketVersioningOutput, error) {
+	if m.getBucketVersioningFunc == nil {
+		return &s3.GetBucketVersioningOutput{Status: types.BucketVersioningStatusEnabled}, nil
+	}
+	return m.getBucketVersioningFunc(ctx, params, optFns...)
+}
+
+func (m *mockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	if m.listObjectsV2Func == nil {
+		return nil, errors.New("ListObjectsV2 not mocked")
+	}
+	return m.listObjectsV2Func(ctx, params, optFns...)
 }
 
 func (m *mockS3Client) ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error) {
