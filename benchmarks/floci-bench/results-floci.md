@@ -2,7 +2,7 @@
 
 These numbers come from the local floci mock (`TARGET=floci`), not real S3.
 They are only good for before/after comparison on the same machine. Do not
-compare them with `results.md`, which holds real AWS S3 runs.
+compare them with `results-s3.md`, which holds real AWS S3 runs.
 
 ## Versioning auto-detect (ListObjectsV2 for never-versioned buckets)
 
