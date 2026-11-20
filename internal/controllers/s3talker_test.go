@@ -32,6 +32,23 @@ func (m *MockS3Client) ListObjectVersions(ctx context.Context, params *s3.ListOb
 	return args.Get(0).(*s3.ListObjectVersionsOutput), args.Error(1)
 }
 
+// GetBucketVersioning reports Enabled unless the test registered an explicit
+// expectation, so tests that only mock ListObjectVersions keep that path.
+func (m *MockS3Client) GetBucketVersioning(ctx context.Context, params *s3.GetBucketVersioningInput, optFns ...func(*s3.Options)) (*s3.GetBucketVersioningOutput, error) {
+	for _, c := range m.ExpectedCalls {
+		if c.Method == "GetBucketVersioning" {
+			args := m.Called(ctx, params, optFns)
+			return args.Get(0).(*s3.GetBucketVersioningOutput), args.Error(1)
+		}
+	}
+	return &s3.GetBucketVersioningOutput{Status: types.BucketVersioningStatusEnabled}, nil
+}
+
+func (m *MockS3Client) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	args := m.Called(ctx, params, optFns)
+	return args.Get(0).(*s3.ListObjectsV2Output), args.Error(1)
+}
+
 func TestS3UsageInfo_SingleBucket(t *testing.T) {
 	mockClient := new(MockS3Client)
 	mockClient.On("ListObjectVersions", mock.Anything, mock.Anything, mock.Anything).Return(&s3.ListObjectVersionsOutput{

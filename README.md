@@ -11,6 +11,7 @@ Works with AWS and any S3 compatible endpoints (Minio, Ceph, Localstack, etc).
 - **Partial Failure Visibility**: `s3_failed_bucket_count` metric shows how many buckets failed without hiding partial results
 - **Flexible Configuration**: Supports both environment variables and command-line flags
 - **Per Storage Class**: Metrics broken down by storage class (STANDARD, GLACIER, etc.)
+- **Versioning Auto-Detect**: Buckets that never had versioning enabled are listed via the faster `ListObjectsV2`; versioned and suspended buckets via `ListObjectVersions`
 - **S3-Compatible**: Works with AWS and any S3-compatible endpoint (MinIO, Ceph, Localstack, etc.)
 
 ## Metrics
@@ -69,6 +70,8 @@ docker run -p 9655:9655 -d \
 ```
 
 > Note: For AWS, all buckets must be in the same region to avoid "BucketRegionError" errors or manually limit the list of buckets. An example of IAM policy can be found [here](./deployments/aws/iam-policy.json)
+
+> Note: `s3:GetBucketVersioning` is used to detect each bucket's versioning status. If it is denied, the exporter falls back to `ListObjectVersions` for that bucket. Listing needs `s3:ListBucket` (never-versioned buckets, `ListObjectsV2`) and `s3:ListBucketVersions` (versioned buckets); the example policy's `s3:List*` covers both.
 
 ### Helm Example
 

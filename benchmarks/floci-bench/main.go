@@ -26,6 +26,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -323,6 +324,8 @@ func measure(ctx context.Context, client controllers.S3ClientInterface, bucket, 
 func cleanBucket(ctx context.Context, client *s3.Client, bucket string, workers int) (int, error) {
 	p := s3.NewListObjectVersionsPaginator(client, &s3.ListObjectVersionsInput{Bucket: aws.String(bucket)})
 	var total int64
+	var failMu sync.Mutex
+	failed := map[string]int{} // per-key DeleteObjects errors by "code: message"
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
@@ -343,18 +346,30 @@ func cleanBucket(ctx context.Context, client *s3.Client, bucket string, workers 
 			continue
 		}
 		g.Go(func() error {
-			if _, err := client.DeleteObjects(gctx, &s3.DeleteObjectsInput{
-				Bucket: aws.String(bucket),
-				Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
-			}); err != nil {
+			errs, err := deleteWithRetry(gctx, client, bucket, ids)
+			if err != nil {
 				return err
 			}
-			atomic.AddInt64(&total, int64(len(ids)))
+			atomic.AddInt64(&total, int64(len(ids)-len(errs)))
+			if len(errs) > 0 {
+				failMu.Lock()
+				for _, e := range errs {
+					failed[aws.ToString(e.Code)+": "+aws.ToString(e.Message)]++
+				}
+				failMu.Unlock()
+			}
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return int(atomic.LoadInt64(&total)), err
+	}
+	if len(failed) > 0 {
+		var n int
+		for _, c := range failed {
+			n += c
+		}
+		return int(atomic.LoadInt64(&total)), fmt.Errorf("%d objects not deleted: %v", n, failed)
 	}
 	return int(atomic.LoadInt64(&total)), nil
 }
@@ -370,4 +385,38 @@ func humanizeBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.2f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// deleteWithRetry deletes ids with DeleteObjects and re-sends the keys that
+// failed. With Quiet the response lists only failed keys, and a 200 response
+// can still carry per-key errors: OCI reports rate limiting as a per-key 429
+// TooManyRequests, which the SDK's request-level retry never sees. It returns
+// the per-key errors left after the last attempt.
+func deleteWithRetry(ctx context.Context, client *s3.Client, bucket string, ids []types.ObjectIdentifier) ([]types.Error, error) {
+	const attempts = 15
+	backoff := 500 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		out, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(bucket),
+			Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(out.Errors) == 0 || attempt == attempts {
+			return out.Errors, nil
+		}
+		ids = make([]types.ObjectIdentifier, 0, len(out.Errors))
+		for _, e := range out.Errors {
+			ids = append(ids, types.ObjectIdentifier{Key: e.Key, VersionId: e.VersionId})
+		}
+		select {
+		case <-ctx.Done():
+			return out.Errors, ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff < 16*time.Second {
+			backoff *= 2
+		}
+	}
 }
