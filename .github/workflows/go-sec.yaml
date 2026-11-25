@@ -24,7 +24,8 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
+
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@v2.30.0
-        with:
-          args: -exclude-dir=\.*test\.* ./...
+        run: gosec -exclude-dir='\.*test\.*' ./...
